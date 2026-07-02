@@ -387,7 +387,14 @@ let state = "count";       // count | race | done
 let stateT = 0, raceTime = 0, paused = false;
 let finishOrder = [];
 let lastBeep = -1;
-let bestTime = parseFloat(localStorage.getItem("microRacersBest") || "0") || null;
+function loadBest() {
+  try { return parseFloat(localStorage.getItem("microRacersBest") || "0") || null; }
+  catch (e) { return null; }
+}
+function saveBest(t) {
+  try { localStorage.setItem("microRacersBest", String(t)); } catch (e) {}
+}
+let bestTime = loadBest();
 
 function startRace() {
   makeCars();
@@ -440,7 +447,7 @@ function frame(now) {
     state = "done"; stateT = 0;
     if (!bestTime || cars[0].finishTime < bestTime) {
       bestTime = cars[0].finishTime;
-      localStorage.setItem("microRacersBest", String(bestTime));
+      saveBest(bestTime);
     }
     beep(660, 0.3); setTimeout(() => beep(880, 0.4), 180);
   }
