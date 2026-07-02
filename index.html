@@ -48,6 +48,7 @@ function resize() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
   [W, H] = viewSize();
   canvas.width = Math.max(1, W * DPR); canvas.height = Math.max(1, H * DPR);
+  canvas.style.width = W + "px"; canvas.style.height = H + "px";
 }
 window.addEventListener("resize", resize);
 resize();
