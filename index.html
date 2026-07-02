@@ -21,13 +21,33 @@
 // R = restart, P = pause. 3 laps against three AI toy cars on a kitchen table.
 // ---------------------------------------------------------------------------
 
+// Surface any startup crash instead of a silent black screen.
+window.onerror = function (msg, src, line) {
+  let el = document.getElementById("err");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "err";
+    el.style.cssText = "position:fixed;top:8px;left:8px;right:8px;z-index:9;color:#fff;background:rgba(180,30,30,.92);font:14px monospace;padding:10px;border-radius:8px;white-space:pre-wrap;";
+    document.body.appendChild(el);
+  }
+  el.textContent += msg + " @" + line + "\n";
+};
+
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 let W = 0, H = 0, DPR = 1;
+function viewSize() {
+  // innerWidth can be 0 inside embedded viewers before layout settles
+  const vv = window.visualViewport;
+  return [
+    Math.max(window.innerWidth, vv ? vv.width : 0, document.documentElement.clientWidth || 0),
+    Math.max(window.innerHeight, vv ? vv.height : 0, document.documentElement.clientHeight || 0),
+  ];
+}
 function resize() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
-  W = window.innerWidth; H = window.innerHeight;
-  canvas.width = W * DPR; canvas.height = H * DPR;
+  [W, H] = viewSize();
+  canvas.width = Math.max(1, W * DPR); canvas.height = Math.max(1, H * DPR);
 }
 window.addEventListener("resize", resize);
 resize();
@@ -410,6 +430,8 @@ const cam = { x: cars[0].x, y: cars[0].y, zoom: 1.1 };
 let lastT = performance.now();
 function frame(now) {
   requestAnimationFrame(frame);
+  const [vw2, vh2] = viewSize();
+  if (vw2 !== W || vh2 !== H) resize();   // catches viewers that never fire resize
   let dt = Math.min((now - lastT) / 1000, 0.033);
   lastT = now;
   if (paused) dt = 0;
