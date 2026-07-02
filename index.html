@@ -426,6 +426,24 @@ const ROSTER = [
   { name: "Zippy",   color: "#3fc069", roof: "#83e0a4", ai: true,  top: 0.955 },
   { name: "Bruiser", color: "#e3a63f", roof: "#f5cf82", ai: true,  top: 0.925 },
 ];
+
+// AI difficulty: speed = straight-line pace, corner/cmin = how much speed
+// they carry through bends, band = max rubber-band boost, line = how far
+// they stray from the ideal racing line
+const DIFFS = [
+  { name: "EASY",   speed: 0.94, corner: 1.10, cmin: 0.26, band: 1.04, line: 1.0 },
+  { name: "MEDIUM", speed: 1.00, corner: 1.18, cmin: 0.28, band: 1.10, line: 1.0 },
+  { name: "HARD",   speed: 1.05, corner: 1.30, cmin: 0.36, band: 1.14, line: 0.4 },
+];
+let difficulty = 1;
+try {
+  const v = parseInt(localStorage.getItem("microRacersDiff"), 10);
+  if (!Number.isNaN(v)) difficulty = clamp(v, 0, DIFFS.length - 1);
+} catch (e) {}
+function setDifficulty(d) {
+  difficulty = d;
+  try { localStorage.setItem("microRacersDiff", String(d)); } catch (e) {}
+}
 const MAX_V = 810;        // ≈ accel / forward drag
 const AIR_TIME = 0.55;
 let cars = [];
@@ -525,19 +543,21 @@ function updateCar(car, dt, throttle, steer, handbrake) {
 }
 
 function aiControls(car) {
+  const D = DIFFS[difficulty];
   const f = car.vx * Math.cos(car.angle) + car.vy * Math.sin(car.angle);
   const look = Math.floor(6 + f * 0.022);
   const t = SAMPLES[(car.si + look) % N_S];
   const tn = { x: -t.dy, y: t.dx };
-  const tx = t.x + tn.x * car.aiOffset, ty = t.y + tn.y * car.aiOffset;
+  const off = car.aiOffset * D.line;
+  const tx = t.x + tn.x * off, ty = t.y + tn.y * off;
   const want = Math.atan2(ty - car.y, tx - car.x);
   const diff = angDiff(want, car.angle);
   const steer = clamp(diff * 3.0, -1, 1);
   const a1 = SAMPLES[(car.si + 6) % N_S], a2 = SAMPLES[(car.si + 20) % N_S];
   const sharp = Math.abs(angDiff(Math.atan2(a2.dy, a2.dx), Math.atan2(a1.dy, a1.dx)));
   const gap = cars[0].progress - car.progress;
-  const band = clamp(1 + gap * 0.00005, 0.93, 1.10);
-  const desired = MAX_V * car.top * band * clamp(1.18 - sharp * 1.85, 0.28, 1);
+  const band = clamp(1 + gap * 0.00005, 0.93, D.band);
+  const desired = MAX_V * car.top * D.speed * band * clamp(D.corner - sharp * 1.85, D.cmin, 1);
   const throttle = f < desired ? 1 : (f - desired > 70 ? -0.55 : 0);
   return { throttle, steer, handbrake: false };
 }
@@ -605,6 +625,7 @@ window.addEventListener("keydown", e => {
   if (state === "menu") {
     if (k === "1") startRace(0);
     if (k === "2") startRace(1);
+    if (k === "d") setDifficulty((difficulty + 1) % DIFFS.length);
   } else {
     if (k === "r") startRace(curTrack);
     if (k === "n") { state = "menu"; }
@@ -906,11 +927,24 @@ function drawMenu() {
   ctx.fillText("MICRO RACERS", W / 2 + 3, H * 0.18 + 3);
   ctx.fillStyle = "#ffd75e";
   ctx.fillText("MICRO RACERS", W / 2, H * 0.18);
-  ctx.font = "20px Arial, sans-serif";
-  ctx.fillStyle = "rgba(255,255,255,0.9)";
-  ctx.fillText("pick a track", W / 2, H * 0.18 + 48);
-
+  // difficulty selector
   const bw = Math.min(W * 0.8, 420), bh = 86;
+  const dw = (bw - 24) / 3, dh = 44, dy = H * 0.36 - dh - 26;
+  ctx.font = "14px Arial, sans-serif"; ctx.fillStyle = "rgba(255,255,255,0.75)";
+  ctx.fillText("AI DIFFICULTY", W / 2, dy - 14);
+  DIFFS.forEach((d, i) => {
+    const dx = W / 2 - bw / 2 + i * (dw + 12);
+    uiButtons.push({ x: dx, y: dy, w: dw, h: dh, fn: () => setDifficulty(i) });
+    ctx.fillStyle = i === difficulty ? "rgba(255,215,94,0.30)" : "rgba(255,255,255,0.10)";
+    roundRect(dx, dy, dw, dh, 10); ctx.fill();
+    ctx.strokeStyle = i === difficulty ? "#ffd75e" : "rgba(255,255,255,0.35)";
+    ctx.lineWidth = 2;
+    roundRect(dx, dy, dw, dh, 10); ctx.stroke();
+    ctx.fillStyle = i === difficulty ? "#ffd75e" : "rgba(255,255,255,0.85)";
+    ctx.font = "bold 17px Arial, sans-serif";
+    ctx.fillText(d.name, dx + dw / 2, dy + dh / 2 + 1);
+  });
+
   TRACKS.forEach((t, i) => {
     const bx = W / 2 - bw / 2, by = H * 0.36 + i * (bh + 22);
     button(bx, by, bw, bh, () => startRace(i));
@@ -927,7 +961,7 @@ function drawMenu() {
   });
   ctx.font = "16px Arial, sans-serif";
   ctx.fillStyle = "rgba(255,255,255,0.7)";
-  ctx.fillText(IS_TOUCH ? "tap a track to start" : "click or press 1 / 2 · N returns here anytime",
+  ctx.fillText(IS_TOUCH ? "tap a track to start" : "click or press 1 / 2 · D cycles difficulty · N returns here anytime",
                W / 2, H * 0.36 + TRACKS.length * (bh + 22) + 20);
 }
 
@@ -991,6 +1025,8 @@ function drawHUD() {
     ctx.fillStyle = pos === 1 ? "#ffd75e" : "#fff";
     ctx.font = "bold 44px Arial, sans-serif";
     ctx.fillText(pos === 1 ? "🏆 YOU WIN!" : `${pos}${suffix} PLACE`, W / 2, H / 2 - 135);
+    ctx.font = "15px Arial, sans-serif"; ctx.fillStyle = "rgba(255,255,255,0.7)";
+    ctx.fillText(`${TRACKS[curTrack].name} · ${DIFFS[difficulty].name}`, W / 2, H / 2 - 104);
     ctx.font = "22px Arial, sans-serif";
     for (let i = 0; i < standings.length; i++) {
       const c = standings[i];
