@@ -18,7 +18,9 @@
 // ---------------------------------------------------------------------------
 // Micro Racers — a tiny top-down Micro Machines style racer.
 // Single file, no dependencies. Arrows/WASD to drive, Space = handbrake,
-// R = restart, P = pause. 3 laps against three AI toy cars on a kitchen table.
+// R = restart, N = track menu, P = pause. 3 laps against three AI toy cars.
+// Tracks: a kitchen table, and a mini golf course with ramps, water,
+// sand traps and a windmill.
 // ---------------------------------------------------------------------------
 
 // Surface any startup crash instead of a silent black screen.
@@ -53,46 +55,135 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 
-// ----- Track ---------------------------------------------------------------
+const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
+function angDiff(a, b) {
+  let d = a - b;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return d;
+}
+
+// ----- Track definitions -----------------------------------------------------
 const WORLD_W = 2600, WORLD_H = 1850;
 const HALF_W = 92;                    // road half-width
-const CONTROL_PTS = [
-  [350,1450],[850,1520],[1400,1500],[1900,1450],[2250,1250],[2300,950],
-  [2150,700],[1850,600],[1600,700],[1500,950],[1300,1100],[1050,1050],
-  [950,800],[1050,550],[900,350],[600,300],[350,450],[250,750],[250,1100]
+
+const TRACKS = [
+  {
+    name: "Kitchen Table",
+    blurb: "wood, coins & coffee stains",
+    pts: [
+      [350,1450],[850,1520],[1400,1500],[1900,1450],[2250,1250],[2300,950],
+      [2150,700],[1850,600],[1600,700],[1500,950],[1300,1100],[1050,1050],
+      [950,800],[1050,550],[900,350],[600,300],[350,450],[250,750],[250,1100]
+    ],
+    theme: drawKitchenWorld,
+    hazards: () => ({ sands: [], waters: [], ramps: [], windmills: [] }),
+  },
+  {
+    name: "Mini Golf",
+    blurb: "ramps · water · sand · windmill",
+    pts: [
+      [300,1500],[800,1550],[1350,1550],[1900,1500],[2300,1300],[2350,1000],
+      [2200,750],[1950,650],[1700,750],[1650,1000],[1450,1150],[1200,1150],
+      [1000,1000],[950,750],[1100,500],[900,300],[550,300],[300,500],
+      [220,900],[230,1250]
+    ],
+    theme: drawGolfWorld,
+    hazards: (track) => {
+      // windmill sits at the fairway edge on the left climb
+      const wi = nearestSampleOf(track.samples, 950, 750);
+      const ws = track.samples[wi];
+      // sand traps clip the outer edge of corners: they catch wide lines,
+      // not cars on the racing line
+      const edge = (ax, ay, r) => {
+        const s = track.samples[nearestSampleOf(track.samples, ax, ay)];
+        const d = HALF_W + r * 0.55;
+        const cA = { x: s.x - s.dy * d, y: s.y + s.dx * d, r };
+        const cB = { x: s.x + s.dy * d, y: s.y - s.dx * d, r };
+        const cx = 1300, cy = 950;   // rough course centre
+        return ((cA.x - cx) ** 2 + (cA.y - cy) ** 2 > (cB.x - cx) ** 2 + (cB.y - cy) ** 2) ? cA : cB;
+      };
+      return {
+        sands: [
+          edge(2330, 1150, 90),
+          edge(1080, 460, 85),
+          edge(280, 1330, 80),
+          edge(1550, 1120, 75),
+        ],
+        waters: [
+          { kind: "rect", x: 1275, y: 1400, w: 120, h: 300 },   // the carry
+          { kind: "circle", x: 2000, y: 1050, r: 135 },          // infield pond
+        ],
+        ramps: [
+          { x: 1150, y: 1430, w: 95, h: 235, dx: 1, dy: 0 },
+        ],
+        windmills: [
+          { x: ws.x - ws.dy * 85, y: ws.y + ws.dx * 85,
+            len: 150, hubR: 24, armW: 16, ang: 0, om: 1.0 },
+        ],
+      };
+    },
+  },
 ];
 
+function nearestSampleOf(samples, x, y) {
+  let best = 0, bd = Infinity;
+  for (let i = 0; i < samples.length; i++) {
+    const s = samples[i];
+    const d = (x - s.x) * (x - s.x) + (y - s.y) * (y - s.y);
+    if (d < bd) { bd = d; best = i; }
+  }
+  return best;
+}
+
 // Sample a closed Catmull-Rom spline through the control points.
-const SAMPLES = [];
-(function buildSpline() {
-  const n = CONTROL_PTS.length, steps = 14;
+function buildSamples(pts) {
+  const samples = [];
+  const n = pts.length, steps = 14;
   for (let i = 0; i < n; i++) {
-    const p0 = CONTROL_PTS[(i - 1 + n) % n], p1 = CONTROL_PTS[i];
-    const p2 = CONTROL_PTS[(i + 1) % n],     p3 = CONTROL_PTS[(i + 2) % n];
+    const p0 = pts[(i - 1 + n) % n], p1 = pts[i];
+    const p2 = pts[(i + 1) % n],     p3 = pts[(i + 2) % n];
     for (let s = 0; s < steps; s++) {
       const t = s / steps, t2 = t * t, t3 = t2 * t;
       const x = 0.5 * ((2*p1[0]) + (-p0[0]+p2[0])*t + (2*p0[0]-5*p1[0]+4*p2[0]-p3[0])*t2 + (-p0[0]+3*p1[0]-3*p2[0]+p3[0])*t3);
       const y = 0.5 * ((2*p1[1]) + (-p0[1]+p2[1])*t + (2*p0[1]-5*p1[1]+4*p2[1]-p3[1])*t2 + (-p0[1]+3*p1[1]-3*p2[1]+p3[1])*t3);
-      SAMPLES.push({ x, y, dx: 0, dy: 0, cum: 0 });
+      samples.push({ x, y, dx: 0, dy: 0, cum: 0 });
     }
   }
-  const N = SAMPLES.length;
+  const N = samples.length;
   let cum = 0;
   for (let i = 0; i < N; i++) {
-    const a = SAMPLES[i], b = SAMPLES[(i + 1) % N];
+    const a = samples[i], b = samples[(i + 1) % N];
     const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
     a.dx = dx / len; a.dy = dy / len;
     a.cum = cum; cum += len;
   }
-  SAMPLES.totalLen = cum;
-})();
-const N_S = SAMPLES.length;
+  samples.totalLen = cum;
+  return samples;
+}
+
+// Current track state (reassigned by loadTrack)
+let curTrack = 0;
+let SAMPLES = null, N_S = 0, world = null, HZ = null;
+
+function loadTrack(i) {
+  curTrack = i;
+  const def = TRACKS[i];
+  if (!def.samples) def.samples = buildSamples(def.pts);
+  SAMPLES = def.samples; N_S = SAMPLES.length;
+  if (!def.hz) def.hz = def.hazards(def);
+  HZ = def.hz;
+  if (!def.world) {
+    def.world = document.createElement("canvas");
+    def.world.width = WORLD_W; def.world.height = WORLD_H;
+    def.theme(def.world.getContext("2d"), def);
+  }
+  world = def.world;
+}
 
 function nearestSample(x, y, hint) {
   let best = hint, bd = Infinity;
-  const span = (hint == null) ? N_S : 45;
-  const start = (hint == null) ? 0 : hint - span;
-  for (let k = start; k < start + (hint == null ? N_S : span * 2); k++) {
+  for (let k = hint - 45; k < hint + 45; k++) {
     const i = ((k % N_S) + N_S) % N_S;
     const s = SAMPLES[i];
     const d = (x - s.x) * (x - s.x) + (y - s.y) * (y - s.y);
@@ -100,26 +191,70 @@ function nearestSample(x, y, hint) {
   }
   return best;
 }
-function angDiff(a, b) {
-  let d = a - b;
-  while (d > Math.PI) d -= 2 * Math.PI;
-  while (d < -Math.PI) d += 2 * Math.PI;
-  return d;
-}
-const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
 
-// ----- Pre-rendered world (table + track) -----------------------------------
-const world = document.createElement("canvas");
-world.width = WORLD_W; world.height = WORLD_H;
-(function drawWorld() {
-  const g = world.getContext("2d");
+// ----- Hazard queries ---------------------------------------------------------
+function inWater(x, y) {
+  for (const w of HZ.waters) {
+    if (w.kind === "rect") {
+      if (x >= w.x && x <= w.x + w.w && y >= w.y && y <= w.y + w.h) return true;
+    } else if ((x - w.x) ** 2 + (y - w.y) ** 2 < w.r * w.r) return true;
+  }
+  return false;
+}
+function inSand(x, y) {
+  for (const s of HZ.sands) {
+    if ((x - s.x) ** 2 + (y - s.y) ** 2 < s.r * s.r) return true;
+  }
+  return false;
+}
+function rampAt(x, y) {
+  for (const r of HZ.ramps) {
+    if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return r;
+  }
+  return null;
+}
+// walk backwards along the track to a spot that isn't wet, plus a run-up
+function findSafeSample(si) {
+  let idx = si;
+  for (let k = 0; k < N_S; k++) {
+    const s = SAMPLES[idx];
+    if (!inWater(s.x, s.y)) break;
+    idx = (idx - 1 + N_S) % N_S;
+  }
+  return (idx - 14 + N_S) % N_S;
+}
+
+// ----- World themes -------------------------------------------------------------
+function tracePath(g, samples) {
+  const p = new Path2D();
+  p.moveTo(samples[0].x, samples[0].y);
+  for (let i = 1; i < samples.length; i++) p.lineTo(samples[i].x, samples[i].y);
+  p.closePath();
+  return p;
+}
+function drawCheckers(g, s0) {
+  const nx = -s0.dy, ny = s0.dx, cell = 15;
+  for (let row = 0; row < 2; row++) {
+    for (let c = -6; c < 6; c++) {
+      g.fillStyle = ((row + c) % 2 === 0) ? "#111" : "#eee";
+      g.save();
+      g.translate(s0.x + s0.dx * row * cell + nx * c * cell,
+                  s0.y + s0.dy * row * cell + ny * c * cell);
+      g.rotate(Math.atan2(s0.dy, s0.dx));
+      g.fillRect(0, 0, cell, cell);
+      g.restore();
+    }
+  }
+}
+
+function drawKitchenWorld(g, track) {
+  const samples = track.samples, N = samples.length;
   // Wooden table planks
   const plankH = 132;
   for (let y = 0; y < WORLD_H; y += plankH) {
     const l = 46 + ((y / plankH * 7) % 9);
     g.fillStyle = `hsl(28, 42%, ${l}%)`;
     g.fillRect(0, y, WORLD_W, plankH);
-    // grain
     g.strokeStyle = "rgba(70,40,15,0.10)";
     g.lineWidth = 1.5;
     for (let i = 0; i < 26; i++) {
@@ -133,12 +268,12 @@ world.width = WORLD_W; world.height = WORLD_H;
     g.lineWidth = 3;
     g.beginPath(); g.moveTo(0, y); g.lineTo(WORLD_W, y); g.stroke();
   }
-  // Props: coffee ring stains
+  // coffee ring stains
   g.strokeStyle = "rgba(90,45,10,0.22)"; g.lineWidth = 16;
   for (const [cx, cy, r] of [[1720, 980, 105], [2420, 1650, 80], [180, 190, 90]]) {
     g.beginPath(); g.arc(cx, cy, r, 0, 7); g.stroke();
   }
-  // Prop: pencil
+  // pencil
   g.save();
   g.translate(2470, 480); g.rotate(1.35);
   g.fillStyle = "#e8b23c"; g.fillRect(-250, -11, 460, 22);
@@ -147,7 +282,7 @@ world.width = WORLD_W; world.height = WORLD_H;
   g.fillStyle = "#e77"; g.fillRect(-275, -11, 25, 22);
   g.fillStyle = "#aaa"; g.fillRect(-252, -11, 14, 22);
   g.restore();
-  // Prop: sticky note
+  // sticky note
   g.save();
   g.translate(660, 130); g.rotate(-0.12);
   g.fillStyle = "rgba(0,0,0,0.15)"; g.fillRect(-72, -66, 150, 150);
@@ -155,7 +290,7 @@ world.width = WORLD_W; world.height = WORLD_H;
   g.fillStyle = "#7a6a10"; g.font = "bold 34px Comic Sans MS, cursive";
   g.textAlign = "center"; g.fillText("GO", 0, -10); g.fillText("FAST!", 0, 35);
   g.restore();
-  // Prop: coins
+  // coins
   for (const [cx, cy] of [[2340, 240], [140, 1700]]) {
     g.fillStyle = "#c9982f"; g.beginPath(); g.arc(cx, cy, 44, 0, 7); g.fill();
     g.fillStyle = "#e3b84d"; g.beginPath(); g.arc(cx, cy, 37, 0, 7); g.fill();
@@ -164,22 +299,14 @@ world.width = WORLD_W; world.height = WORLD_H;
     g.fillStyle = "#b3872a"; g.font = "bold 40px serif"; g.textAlign = "center";
     g.fillText("1", cx, cy + 14);
   }
-
   // Track: dark border, asphalt, curbs, center dashes
-  const path = new Path2D();
-  path.moveTo(SAMPLES[0].x, SAMPLES[0].y);
-  for (let i = 1; i < N_S; i++) path.lineTo(SAMPLES[i].x, SAMPLES[i].y);
-  path.closePath();
+  const path = tracePath(g, samples);
   g.lineJoin = "round"; g.lineCap = "round";
-  g.strokeStyle = "rgba(0,0,0,0.30)";
-  g.lineWidth = HALF_W * 2 + 26;
-  g.stroke(path);                                  // soft shadow edge
+  g.strokeStyle = "rgba(0,0,0,0.30)"; g.lineWidth = HALF_W * 2 + 26; g.stroke(path);
   g.strokeStyle = "#3f4045"; g.lineWidth = HALF_W * 2 + 14; g.stroke(path);
   g.strokeStyle = "#57585e"; g.lineWidth = HALF_W * 2; g.stroke(path);
-  // curbs: alternating red/white ticks along both edges
-  for (let i = 0; i < N_S; i += 2) {
-    const s = SAMPLES[i];
-    const nx = -s.dy, ny = s.dx;
+  for (let i = 0; i < N; i += 2) {
+    const s = samples[i], nx = -s.dy, ny = s.dx;
     for (const side of [-1, 1]) {
       g.save();
       g.translate(s.x + nx * side * HALF_W, s.y + ny * side * HALF_W);
@@ -189,24 +316,108 @@ world.width = WORLD_W; world.height = WORLD_H;
       g.restore();
     }
   }
-  // center dashed line
   g.strokeStyle = "rgba(255,255,255,0.55)"; g.lineWidth = 4;
   g.setLineDash([26, 22]); g.stroke(path); g.setLineDash([]);
-  // start / finish checkers
-  const s0 = SAMPLES[0], nx = -s0.dy, ny = s0.dx;
-  const cell = 15;
-  for (let row = 0; row < 2; row++) {
-    for (let c = -6; c < 6; c++) {
-      g.fillStyle = ((row + c) % 2 === 0) ? "#111" : "#eee";
-      const bx = s0.x + s0.dx * row * cell + nx * c * cell;
-      const by = s0.y + s0.dy * row * cell + ny * c * cell;
-      g.save();
-      g.translate(bx, by); g.rotate(Math.atan2(s0.dy, s0.dx));
-      g.fillRect(0, 0, cell, cell);
-      g.restore();
+  drawCheckers(g, samples[0]);
+}
+
+function drawGolfWorld(g, track) {
+  const samples = track.samples, hz = track.hz || track.hazards(track);
+  track.hz = hz;
+  // mottled felt rough
+  g.fillStyle = "#8cbb6d";
+  g.fillRect(0, 0, WORLD_W, WORLD_H);
+  for (let i = 0; i < 520; i++) {
+    g.fillStyle = Math.random() < 0.5 ? "rgba(110,150,80,0.18)" : "rgba(160,200,120,0.14)";
+    const r = 15 + Math.random() * 55;
+    g.beginPath();
+    g.arc(Math.random() * WORLD_W, Math.random() * WORLD_H, r, 0, 7);
+    g.fill();
+  }
+  // wooden deck border around the course
+  g.strokeStyle = "#6b4a2a"; g.lineWidth = 26;
+  g.strokeRect(13, 13, WORLD_W - 26, WORLD_H - 26);
+  g.strokeStyle = "rgba(0,0,0,0.25)"; g.lineWidth = 3;
+  g.strokeRect(28, 28, WORLD_W - 56, WORLD_H - 56);
+
+  // giant golf ball prop
+  g.fillStyle = "rgba(0,0,0,0.18)";
+  g.beginPath(); g.ellipse(628, 668, 68, 60, 0, 0, 7); g.fill();
+  g.fillStyle = "#f4f4f0";
+  g.beginPath(); g.arc(620, 650, 66, 0, 7); g.fill();
+  g.fillStyle = "rgba(0,0,0,0.10)";
+  for (let a = 0; a < 20; a++) {
+    const ang = a * 1.9, rr = 12 + (a * 13) % 46;
+    g.beginPath(); g.arc(620 + Math.cos(ang) * rr, 650 + Math.sin(ang) * rr, 4, 0, 7); g.fill();
+  }
+  // decorative putting cup with flag
+  g.fillStyle = "#1e4d28";
+  g.beginPath(); g.ellipse(2450, 330, 26, 14, 0, 0, 7); g.fill();
+  g.strokeStyle = "#ddd"; g.lineWidth = 5;
+  g.beginPath(); g.moveTo(2450, 330); g.lineTo(2450, 210); g.stroke();
+  g.fillStyle = "#e33f3f";
+  g.beginPath(); g.moveTo(2450, 210); g.lineTo(2515, 232); g.lineTo(2450, 254); g.fill();
+
+  // fairway: wooden rails then green felt
+  const path = tracePath(g, samples);
+  g.lineJoin = "round"; g.lineCap = "round";
+  g.strokeStyle = "rgba(0,0,0,0.28)"; g.lineWidth = HALF_W * 2 + 30; g.stroke(path);
+  g.strokeStyle = "#7a5230"; g.lineWidth = HALF_W * 2 + 20; g.stroke(path);
+  g.strokeStyle = "#3f8f52"; g.lineWidth = HALF_W * 2; g.stroke(path);
+  g.strokeStyle = "rgba(255,255,255,0.22)"; g.lineWidth = 4;
+  g.setLineDash([26, 26]); g.stroke(path); g.setLineDash([]);
+
+  // sand traps
+  for (const s of hz.sands) {
+    g.fillStyle = "#b8a25f";
+    g.beginPath(); g.arc(s.x + 4, s.y + 5, s.r, 0, 7); g.fill();
+    g.fillStyle = "#e8d59a";
+    g.beginPath(); g.arc(s.x, s.y, s.r, 0, 7); g.fill();
+    g.fillStyle = "rgba(160,130,70,0.5)";
+    for (let i = 0; i < s.r; i += 4) {
+      const a = i * 2.4, rr = Math.sqrt(i / s.r) * (s.r - 6);
+      g.beginPath(); g.arc(s.x + Math.cos(a) * rr, s.y + Math.sin(a) * rr, 1.6, 0, 7); g.fill();
     }
   }
-})();
+  // water
+  for (const w of hz.waters) {
+    g.fillStyle = "#2f6ea8";
+    if (w.kind === "rect") g.fillRect(w.x - 5, w.y - 5, w.w + 10, w.h + 10);
+    else { g.beginPath(); g.arc(w.x, w.y, w.r + 5, 0, 7); g.fill(); }
+    g.fillStyle = "#3f87cf";
+    if (w.kind === "rect") g.fillRect(w.x, w.y, w.w, w.h);
+    else { g.beginPath(); g.arc(w.x, w.y, w.r, 0, 7); g.fill(); }
+    g.strokeStyle = "rgba(255,255,255,0.35)"; g.lineWidth = 3;
+    for (let i = 0; i < 6; i++) {
+      const rx = w.kind === "rect" ? w.x + (i * 37) % w.w : w.x + Math.cos(i * 2.1) * w.r * 0.55;
+      const ry = w.kind === "rect" ? w.y + (i * 61) % w.h : w.y + Math.sin(i * 2.1) * w.r * 0.55;
+      g.beginPath(); g.arc(rx, ry, 9 + (i % 3) * 5, 0.3, 2.6); g.stroke();
+    }
+  }
+  // ramps: wooden wedge with chevrons
+  for (const r of hz.ramps) {
+    g.fillStyle = "#8a5f35"; g.fillRect(r.x, r.y, r.w, r.h);
+    g.strokeStyle = "rgba(0,0,0,0.3)"; g.lineWidth = 2;
+    for (let px = r.x + 12; px < r.x + r.w; px += 14) {
+      g.beginPath(); g.moveTo(px, r.y); g.lineTo(px, r.y + r.h); g.stroke();
+    }
+    g.strokeStyle = "#fff"; g.lineWidth = 7; g.lineJoin = "miter";
+    for (let cy = r.y + 40; cy < r.y + r.h - 20; cy += 60) {
+      g.beginPath();
+      g.moveTo(r.x + 18, cy - 16); g.lineTo(r.x + r.w - 22, cy); g.lineTo(r.x + 18, cy + 16);
+      g.stroke();
+    }
+  }
+  drawCheckers(g, samples[0]);
+  // flag at the start line
+  const s0 = samples[0];
+  g.strokeStyle = "#eee"; g.lineWidth = 6;
+  g.beginPath(); g.moveTo(s0.x - s0.dy * (HALF_W + 28), s0.y + s0.dx * (HALF_W + 28));
+  g.lineTo(s0.x - s0.dy * (HALF_W + 28), s0.y + s0.dx * (HALF_W + 28) - 120); g.stroke();
+  g.fillStyle = "#e33f3f";
+  const fx = s0.x - s0.dy * (HALF_W + 28), fy = s0.y + s0.dx * (HALF_W + 28) - 120;
+  g.beginPath(); g.moveTo(fx, fy); g.lineTo(fx + 62, fy + 20); g.lineTo(fx, fy + 40); g.fill();
+}
 
 // ----- Cars ------------------------------------------------------------------
 const ROSTER = [
@@ -216,7 +427,9 @@ const ROSTER = [
   { name: "Bruiser", color: "#e3a63f", roof: "#f5cf82", ai: true,  top: 0.925 },
 ];
 const MAX_V = 810;        // ≈ accel / forward drag
+const AIR_TIME = 0.55;
 let cars = [];
+let splashes = [];
 
 function makeCars() {
   cars = ROSTER.map((r, i) => {
@@ -231,36 +444,56 @@ function makeCars() {
       angle: Math.atan2(s.dy, s.dx),
       vx: 0, vy: 0, si,
       lap: 0, finished: false, finishTime: 0,
-      respawn: 0, aiOffset: (Math.random() - 0.5) * 44,
+      respawn: 0, air: 0, aiOffset: (Math.random() - 0.5) * 44,
       progress: 0,
     };
   });
 }
 
 function updateCar(car, dt, throttle, steer, handbrake) {
-  const fx = Math.cos(car.angle), fy = Math.sin(car.angle);
-  const nx = -fy, ny = fx;
-  // off-road check
-  const s = SAMPLES[car.si];
-  const distC = Math.hypot(car.x - s.x, car.y - s.y);
-  const off = distC > HALF_W;
-  // thrust
-  const acc = throttle > 0 ? throttle * (off ? 270 : 570) : throttle * 340;
-  car.vx += fx * acc * dt; car.vy += fy * acc * dt;
-  // decompose velocity, apply grip + drag
-  let f = car.vx * fx + car.vy * fy;
-  let l = car.vx * nx + car.vy * ny;
-  const fwdDamp = off ? 2.4 : 0.7;
-  const latDamp = handbrake ? 1.7 : (off ? 4.0 : 8.0);
-  f *= Math.exp(-fwdDamp * dt);
-  l *= Math.exp(-latDamp * dt);
-  car.vx = fx * f + nx * l; car.vy = fy * f + ny * l;
-  // steering scales with speed so you can't spin in place
-  const spdFactor = clamp(Math.abs(f) / 130, 0, 1);
-  car.angle += steer * 4.1 * spdFactor * Math.sign(f || 1) * dt;
-  car.x += car.vx * dt; car.y += car.vy * dt;
+  if (car.air > 0) {
+    // flying: keep velocity, no grip, no steering
+    car.air -= dt;
+    car.x += car.vx * dt; car.y += car.vy * dt;
+  } else {
+    const fx = Math.cos(car.angle), fy = Math.sin(car.angle);
+    const nx = -fy, ny = fx;
+    const s = SAMPLES[car.si];
+    const off = Math.hypot(car.x - s.x, car.y - s.y) > HALF_W;
+    const sand = inSand(car.x, car.y);
+    // thrust: sand is worse than rough
+    const fwdAcc = sand ? 180 : (off ? 270 : 570);
+    const acc = throttle > 0 ? throttle * fwdAcc : throttle * 340;
+    car.vx += fx * acc * dt; car.vy += fy * acc * dt;
+    let f = car.vx * fx + car.vy * fy;
+    let l = car.vx * nx + car.vy * ny;
+    const fwdDamp = sand ? 4.2 : (off ? 2.4 : 0.7);
+    const latDamp = handbrake ? 1.7 : (off || sand ? 4.0 : 8.0);
+    f *= Math.exp(-fwdDamp * dt);
+    l *= Math.exp(-latDamp * dt);
+    car.vx = fx * f + nx * l; car.vy = fy * f + ny * l;
+    const spdFactor = clamp(Math.abs(f) / 130, 0, 1);
+    car.angle += steer * 4.1 * spdFactor * Math.sign(f || 1) * dt;
+    car.x += car.vx * dt; car.y += car.vy * dt;
+
+    // ramp launch (must be moving with the ramp)
+    const ramp = rampAt(car.x, car.y);
+    if (ramp && car.vx * ramp.dx + car.vy * ramp.dy > 140) {
+      car.air = AIR_TIME;
+      car.vx *= 1.12; car.vy *= 1.12;
+      if (!car.ai) beep(520, 0.12);
+    }
+    // water: splash + hand of god
+    if (car.respawn <= 0 && car.air <= 0 && inWater(car.x, car.y)) {
+      splashes.push({ x: car.x, y: car.y, t: 0.5 });
+      if (!car.ai) beep(180, 0.25);
+      car.respawn = 0.7;
+      car.wet = true;
+    }
+  }
   car.x = clamp(car.x, 20, WORLD_W - 20);
   car.y = clamp(car.y, 20, WORLD_H - 20);
+
   // progress + laps
   const prev = car.si;
   car.si = nearestSample(car.x, car.y, car.si);
@@ -272,17 +505,21 @@ function updateCar(car, dt, throttle, steer, handbrake) {
     car.finishTime = raceTime;
     finishOrder.push(car);
   }
-  // fell too far off the road? the Hand of God puts you back (fade out/in)
+  // wandered too far off the fairway? back on track you go
   const sNow = SAMPLES[car.si];
-  if (Math.hypot(car.x - sNow.x, car.y - sNow.y) > HALF_W * 1.9 && car.respawn <= 0) {
+  if (car.air <= 0 && car.respawn <= 0 &&
+      Math.hypot(car.x - sNow.x, car.y - sNow.y) > HALF_W * 1.9) {
     car.respawn = 0.7;
   }
   if (car.respawn > 0) {
     car.respawn -= dt;
     if (car.respawn <= 0.35 && car.respawn + dt > 0.35) {
-      car.x = sNow.x; car.y = sNow.y;
-      car.angle = Math.atan2(sNow.dy, sNow.dx);
-      car.vx = car.vy = 0;
+      const idx = car.wet ? findSafeSample(car.si) : car.si;
+      const sp = SAMPLES[idx];
+      car.x = sp.x; car.y = sp.y;
+      car.angle = Math.atan2(sp.dy, sp.dx);
+      car.vx = car.vy = 0; car.wet = false; car.air = 0;
+      car.si = idx;
     }
   }
 }
@@ -296,10 +533,8 @@ function aiControls(car) {
   const want = Math.atan2(ty - car.y, tx - car.x);
   const diff = angDiff(want, car.angle);
   const steer = clamp(diff * 3.0, -1, 1);
-  // slow down for corners ahead
   const a1 = SAMPLES[(car.si + 6) % N_S], a2 = SAMPLES[(car.si + 20) % N_S];
   const sharp = Math.abs(angDiff(Math.atan2(a2.dy, a2.dx), Math.atan2(a1.dy, a1.dx)));
-  // rubber-banding vs player keeps races close
   const gap = cars[0].progress - car.progress;
   const band = clamp(1 + gap * 0.00005, 0.93, 1.10);
   const desired = MAX_V * car.top * band * clamp(1.18 - sharp * 1.85, 0.28, 1);
@@ -312,6 +547,7 @@ function collideCars() {
   for (let i = 0; i < cars.length; i++) {
     for (let j = i + 1; j < cars.length; j++) {
       const a = cars[i], b = cars[j];
+      if (a.air > 0 || b.air > 0) continue;   // can't hit a flying car
       let dx = b.x - a.x, dy = b.y - a.y;
       let d = Math.hypot(dx, dy);
       if (d === 0) { dx = 1; d = 1; }
@@ -331,16 +567,67 @@ function collideCars() {
   }
 }
 
+function windmillHits(dt) {
+  for (const w of HZ.windmills) {
+    w.ang += w.om * dt;
+    for (const car of cars) {
+      if (car.air > 0 || car.respawn > 0) continue;
+      const dx = car.x - w.x, dy = car.y - w.y;
+      const r = Math.hypot(dx, dy);
+      if (r < w.hubR + 13) {                       // solid hub: shove out
+        const ux = dx / (r || 1), uy = dy / (r || 1);
+        car.x = w.x + ux * (w.hubR + 14); car.y = w.y + uy * (w.hubR + 14);
+        car.vx = ux * 120; car.vy = uy * 120;
+      } else if (r < w.len + 8) {                  // rotating blades
+        const phi = Math.atan2(dy, dx);
+        for (let k = 0; k < 4; k++) {
+          const a = w.ang + k * Math.PI / 2;
+          if (Math.abs(angDiff(phi, a)) < Math.atan((w.armW / 2 + 11) / r)) {
+            // batted along the blade's swing
+            const tx = -Math.sin(a) * Math.sign(w.om), ty = Math.cos(a) * Math.sign(w.om);
+            car.vx = tx * 260 + dx / r * 120;
+            car.vy = ty * 260 + dy / r * 120;
+            if (!car.ai) beep(140, 0.15);
+            break;
+          }
+        }
+      }
+    }
+  }
+}
+
 // ----- Input -----------------------------------------------------------------
 const keys = {};
 window.addEventListener("keydown", e => {
   if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) e.preventDefault();
-  keys[e.key.toLowerCase()] = true;
-  if (e.key.toLowerCase() === "r") startRace();
-  if (e.key.toLowerCase() === "p" && state === "race") paused = !paused;
+  const k = e.key.toLowerCase();
+  keys[k] = true;
+  if (state === "menu") {
+    if (k === "1") startRace(0);
+    if (k === "2") startRace(1);
+  } else {
+    if (k === "r") startRace(curTrack);
+    if (k === "n") { state = "menu"; }
+    if (k === "p" && state === "race") paused = !paused;
+  }
   initAudio();
 });
 window.addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
+
+// UI buttons (recomputed each frame by the draw code)
+let uiButtons = [];
+function pointerDown(px, py) {
+  initAudio();
+  for (const b of uiButtons) {
+    if (px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h) {
+      b.fn();
+      return true;
+    }
+  }
+  if (state === "done") { startRace(curTrack); return true; }
+  return false;
+}
+canvas.addEventListener("mousedown", e => pointerDown(e.clientX, e.clientY));
 
 // Touch controls (only drawn on touch devices)
 const IS_TOUCH = ("ontouchstart" in window) || navigator.maxTouchPoints > 0;
@@ -357,6 +644,10 @@ function touchZones() {
 function handleTouches(e) {
   e.preventDefault();
   initAudio();
+  if (e.type === "touchstart" && (state === "menu" || state === "done")) {
+    const t = e.changedTouches[0];
+    if (t && pointerDown(t.clientX, t.clientY)) return;
+  }
   const z = touchZones();
   for (const k in touchState) touchState[k] = false;
   for (const t of e.touches) {
@@ -365,11 +656,6 @@ function handleTouches(e) {
       if (t.clientX >= r.x - 10 && t.clientX <= r.x + r.w + 10 &&
           t.clientY >= r.y - 10 && t.clientY <= r.y + r.h + 10) touchState[k] = true;
     }
-  }
-  if (state === "done" && e.touches.length > 0) {
-    let onButton = false;
-    for (const k in touchState) if (touchState[k]) onButton = true;
-    if (!onButton) startRace();
   }
 }
 canvas.addEventListener("touchstart", handleTouches, { passive: false });
@@ -404,28 +690,34 @@ function beep(freq, dur) {
 }
 
 // ----- Race state ---------------------------------------------------------------
-let state = "count";       // count | race | done
+let state = "menu";       // menu | count | race | done
 let stateT = 0, raceTime = 0, paused = false;
 let finishOrder = [];
 let lastBeep = -1;
-function loadBest() {
-  try { return parseFloat(localStorage.getItem("microRacersBest") || "0") || null; }
+
+function loadBest(i) {
+  try { return parseFloat(localStorage.getItem("microRacersBest_" + i) || "0") || null; }
   catch (e) { return null; }
 }
-function saveBest(t) {
-  try { localStorage.setItem("microRacersBest", String(t)); } catch (e) {}
+function saveBest(i, t) {
+  try { localStorage.setItem("microRacersBest_" + i, String(t)); } catch (e) {}
 }
-let bestTime = loadBest();
+const bestTimes = TRACKS.map((_, i) => loadBest(i));
 
-function startRace() {
+function startRace(trackIdx) {
+  loadTrack(trackIdx);
   makeCars();
+  splashes = [];
   state = "count"; stateT = 0; raceTime = 0;
   finishOrder = []; lastBeep = -1; paused = false;
+  cam.x = cars[0].x; cam.y = cars[0].y;
 }
-startRace();
+
+loadTrack(0);
+makeCars();   // parked on the grid behind the menu
 
 // ----- Camera --------------------------------------------------------------------
-const cam = { x: cars[0].x, y: cars[0].y, zoom: 1.1 };
+const cam = { x: WORLD_W / 2, y: WORLD_H / 2, zoom: 1.1 };
 
 // ----- Main loop --------------------------------------------------------------------
 let lastT = performance.now();
@@ -437,7 +729,6 @@ function frame(now) {
   lastT = now;
   if (paused) dt = 0;
 
-  // --- update ---
   stateT += dt;
   if (state === "count") {
     const n = 3 - Math.floor(stateT);
@@ -447,50 +738,61 @@ function frame(now) {
   if (state === "race" || state === "done") raceTime += dt;
 
   const racing = state === "race" || state === "done";
-  for (const car of cars) {
-    let c = { throttle: 0, steer: 0, handbrake: false };
-    if (racing && !car.finished && car.respawn <= 0) {
-      if (car.ai) c = aiControls(car);
-      else {
-        const up = keys["arrowup"] || keys["w"] || touchState.gas;
-        const dn = keys["arrowdown"] || keys["s"] || touchState.brake;
-        const lf = keys["arrowleft"] || keys["a"] || touchState.left;
-        const rt = keys["arrowright"] || keys["d"] || touchState.right;
-        c.throttle = (up ? 1 : 0) + (dn ? -1 : 0);
-        c.steer = (rt ? 1 : 0) - (lf ? 1 : 0);
-        c.handbrake = !!keys[" "];
+  if (state !== "menu") {
+    for (const car of cars) {
+      let c = { throttle: 0, steer: 0, handbrake: false };
+      if (racing && !car.finished && car.respawn <= 0) {
+        if (car.ai) c = aiControls(car);
+        else {
+          const up = keys["arrowup"] || keys["w"] || touchState.gas;
+          const dn = keys["arrowdown"] || keys["s"] || touchState.brake;
+          const lf = keys["arrowleft"] || keys["a"] || touchState.left;
+          const rt = keys["arrowright"] || keys["d"] || touchState.right;
+          c.throttle = (up ? 1 : 0) + (dn ? -1 : 0);
+          c.steer = (rt ? 1 : 0) - (lf ? 1 : 0);
+          c.handbrake = !!keys[" "];
+        }
       }
+      if (car.finished && car.ai) c = { throttle: 0.15, steer: aiControls(car).steer, handbrake: false };
+      updateCar(car, dt, c.throttle, c.steer, c.handbrake);
     }
-    if (car.finished && car.ai !== false) c = { throttle: 0.15, steer: aiControls(car).steer, handbrake: false };
-    updateCar(car, dt, c.throttle, c.steer, c.handbrake);
-  }
-  collideCars();
+    collideCars();
+    windmillHits(dt);
 
-  if (state === "race" && cars[0].finished) {
-    state = "done"; stateT = 0;
-    if (!bestTime || cars[0].finishTime < bestTime) {
-      bestTime = cars[0].finishTime;
-      saveBest(bestTime);
+    if (state === "race" && cars[0].finished) {
+      state = "done"; stateT = 0;
+      if (!bestTimes[curTrack] || cars[0].finishTime < bestTimes[curTrack]) {
+        bestTimes[curTrack] = cars[0].finishTime;
+        saveBest(curTrack, bestTimes[curTrack]);
+      }
+      beep(660, 0.3); setTimeout(() => beep(880, 0.4), 180);
     }
-    beep(660, 0.3); setTimeout(() => beep(880, 0.4), 180);
+  } else {
+    for (const w of HZ.windmills) w.ang += w.om * dt;   // idle spin behind menu
   }
+  for (const sp of splashes) sp.t -= dt;
+  splashes = splashes.filter(sp => sp.t > 0);
 
-  // engine sound follows player speed
   if (engineGain) {
     const spd = Math.hypot(cars[0].vx, cars[0].vy);
     engineOsc.frequency.value = 55 + spd * 0.28;
     engineGain.gain.value = racing && !paused ? 0.035 + spd * 0.00002 : 0;
   }
 
-  // camera: lead the player slightly, zoom out with speed
+  // camera: follow player (or hover over the course in the menu)
   const p = cars[0];
   const spd = Math.hypot(p.vx, p.vy);
-  const tx = p.x + p.vx * 0.30, ty = p.y + p.vy * 0.30;
+  let tx, ty, tz;
+  if (state === "menu") {
+    tx = WORLD_W / 2; ty = WORLD_H / 2;
+    tz = Math.max(W / WORLD_W, H / WORLD_H) * 1.02;
+  } else {
+    tx = p.x + p.vx * 0.30; ty = p.y + p.vy * 0.30;
+    tz = clamp(1.28 - spd * 0.00055, 0.85, 1.28) * Math.min(W / 1100, 1.4);
+  }
   cam.x += (tx - cam.x) * Math.min(1, dt * 5);
   cam.y += (ty - cam.y) * Math.min(1, dt * 5);
-  const tz = clamp(1.28 - spd * 0.00055, 0.85, 1.28) * Math.min(W / 1100, 1.4);
   cam.zoom += (tz - cam.zoom) * Math.min(1, dt * 2);
-  // keep the view on the table
   const vw = W / (2 * cam.zoom), vh = H / (2 * cam.zoom);
   if (vw * 2 < WORLD_W) cam.x = clamp(cam.x, vw, WORLD_W - vw); else cam.x = WORLD_W / 2;
   if (vh * 2 < WORLD_H) cam.y = clamp(cam.y, vh, WORLD_H - vh); else cam.y = WORLD_H / 2;
@@ -503,53 +805,130 @@ function frame(now) {
                    DPR * (W / 2 - cam.x * cam.zoom), DPR * (H / 2 - cam.y * cam.zoom));
   ctx.drawImage(world, 0, 0);
 
-  // cars, drawn back-of-pack first
-  const order = [...cars].sort((a, b) => a.progress - b.progress);
+  for (const sp of splashes) {
+    ctx.strokeStyle = `rgba(220,240,255,${sp.t * 1.6})`;
+    ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.arc(sp.x, sp.y, (0.5 - sp.t) * 110 + 12, 0, 7); ctx.stroke();
+  }
+  const order = [...cars].sort((a, b) => (a.air > 0 ? 1 : 0) - (b.air > 0 ? 1 : 0) || a.progress - b.progress);
   for (const car of order) drawCar(car);
+  drawWindmills();
 
-  // --- HUD ---
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  drawHUD();
-  if (IS_TOUCH) drawTouchControls();
+  uiButtons = [];
+  if (state === "menu") drawMenu();
+  else {
+    drawHUD();
+    if (IS_TOUCH) drawTouchControls();
+  }
 }
 requestAnimationFrame(frame);
 
 function drawCar(car) {
   const alpha = car.respawn > 0 ? clamp(Math.abs(car.respawn - 0.35) * 4, 0.1, 1) : 1;
+  const hop = car.air > 0 ? Math.sin((1 - car.air / AIR_TIME) * Math.PI) : 0;
+  const scale = 1 + hop * 0.4;
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.translate(car.x, car.y);
-  // toy-car shadow
   ctx.fillStyle = "rgba(0,0,0,0.30)";
-  ctx.beginPath(); ctx.ellipse(3, 5, 20, 14, 0, 0, 7); ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(3 + hop * 14, 5 + hop * 18, 20 * (1 - hop * 0.3), 14 * (1 - hop * 0.3), 0, 0, 7);
+  ctx.fill();
+  ctx.scale(scale, scale);
   ctx.rotate(car.angle);
-  // wheels
   ctx.fillStyle = "#1c1c1c";
   for (const [wx, wy] of [[-11,-10],[-11,10],[11,-10],[11,10]]) ctx.fillRect(wx - 4, wy - 3, 8, 6);
-  // body
   ctx.fillStyle = car.color;
   ctx.beginPath();
   ctx.moveTo(-17, -8); ctx.lineTo(12, -9); ctx.lineTo(18, -4);
   ctx.lineTo(18, 4);  ctx.lineTo(12, 9);  ctx.lineTo(-17, 8);
   ctx.closePath(); ctx.fill();
   ctx.strokeStyle = "rgba(0,0,0,0.45)"; ctx.lineWidth = 1.5; ctx.stroke();
-  // roof + windshield
   ctx.fillStyle = car.roof; ctx.fillRect(-10, -6, 14, 12);
   ctx.fillStyle = "#223"; ctx.fillRect(4, -6, 4, 12);
   ctx.restore();
-  // player marker
-  if (!car.ai && state !== "done") {
+  if (!car.ai && state === "race") {
     ctx.save();
-    ctx.translate(car.x, car.y - 30);
+    ctx.translate(car.x, car.y - 30 - hop * 20);
     ctx.fillStyle = "rgba(255,255,255,0.85)";
     ctx.beginPath(); ctx.moveTo(-7, -8); ctx.lineTo(7, -8); ctx.lineTo(0, 2); ctx.fill();
     ctx.restore();
   }
 }
 
+function drawWindmills() {
+  for (const w of HZ.windmills) {
+    // hut
+    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    ctx.beginPath(); ctx.ellipse(w.x + 5, w.y + 8, 40, 30, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = "#c9552e";
+    ctx.beginPath(); ctx.arc(w.x, w.y, 34, 0, 7); ctx.fill();
+    ctx.fillStyle = "#a03e1e";
+    ctx.beginPath(); ctx.arc(w.x, w.y, 34, -0.6, 2.5); ctx.fill();
+    // blades
+    for (let k = 0; k < 4; k++) {
+      const a = w.ang + k * Math.PI / 2;
+      ctx.save();
+      ctx.translate(w.x, w.y); ctx.rotate(a);
+      ctx.fillStyle = "rgba(0,0,0,0.18)";
+      ctx.fillRect(w.hubR - 2, -w.armW / 2 + 6, w.len - w.hubR, w.armW);
+      ctx.fillStyle = "#f0e6d2";
+      ctx.fillRect(w.hubR - 2, -w.armW / 2, w.len - w.hubR, w.armW);
+      ctx.strokeStyle = "#8a5f35"; ctx.lineWidth = 3;
+      ctx.strokeRect(w.hubR - 2, -w.armW / 2, w.len - w.hubR, w.armW);
+      ctx.restore();
+    }
+    ctx.fillStyle = "#6b4a2a";
+    ctx.beginPath(); ctx.arc(w.x, w.y, w.hubR * 0.55, 0, 7); ctx.fill();
+  }
+}
+
 function fmtTime(t) {
   const m = Math.floor(t / 60), s = t % 60;
   return `${m}:${s.toFixed(2).padStart(5, "0")}`;
+}
+
+function button(x, y, w, h, fn) {
+  uiButtons.push({ x, y, w, h, fn });
+  ctx.fillStyle = "rgba(255,255,255,0.12)";
+  roundRect(x, y, w, h, 14); ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.45)"; ctx.lineWidth = 2;
+  roundRect(x, y, w, h, 14); ctx.stroke();
+}
+
+function drawMenu() {
+  ctx.fillStyle = "rgba(15,25,15,0.55)";
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillStyle = "rgba(0,0,0,0.5)";
+  ctx.font = "bold 58px Arial, sans-serif";
+  ctx.fillText("MICRO RACERS", W / 2 + 3, H * 0.18 + 3);
+  ctx.fillStyle = "#ffd75e";
+  ctx.fillText("MICRO RACERS", W / 2, H * 0.18);
+  ctx.font = "20px Arial, sans-serif";
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.fillText("pick a track", W / 2, H * 0.18 + 48);
+
+  const bw = Math.min(W * 0.8, 420), bh = 86;
+  TRACKS.forEach((t, i) => {
+    const bx = W / 2 - bw / 2, by = H * 0.36 + i * (bh + 22);
+    button(bx, by, bw, bh, () => startRace(i));
+    ctx.fillStyle = "#fff"; ctx.font = "bold 26px Arial, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText(`${i + 1}. ${t.name}`, bx + 24, by + 30);
+    ctx.font = "16px Arial, sans-serif"; ctx.fillStyle = "rgba(255,255,255,0.75)";
+    ctx.fillText(t.blurb, bx + 24, by + 58);
+    if (bestTimes[i]) {
+      ctx.textAlign = "right"; ctx.fillStyle = "#ffd75e";
+      ctx.fillText(`best ${fmtTime(bestTimes[i])}`, bx + bw - 20, by + 58);
+    }
+    ctx.textAlign = "center";
+  });
+  ctx.font = "16px Arial, sans-serif";
+  ctx.fillStyle = "rgba(255,255,255,0.7)";
+  ctx.fillText(IS_TOUCH ? "tap a track to start" : "click or press 1 / 2 · N returns here anytime",
+               W / 2, H * 0.36 + TRACKS.length * (bh + 22) + 20);
 }
 
 function drawHUD() {
@@ -561,7 +940,6 @@ function drawHUD() {
   });
   const pos = standings.indexOf(p) + 1;
 
-  // top-left: position + lap
   ctx.font = "bold 34px Arial, sans-serif";
   ctx.textAlign = "left"; ctx.textBaseline = "top";
   ctx.fillStyle = "rgba(0,0,0,0.45)";
@@ -572,24 +950,20 @@ function drawHUD() {
   ctx.font = "bold 22px Arial, sans-serif";
   ctx.fillStyle = "#ffd75e";
   ctx.fillText(`LAP ${clamp(p.lap, 1, 3)}/3`, 26, 66);
-  // mini standings dots
   for (let i = 0; i < standings.length; i++) {
     ctx.fillStyle = standings[i].color;
     ctx.beginPath(); ctx.arc(150 + (i % 2) * 30, 34 + Math.floor(i / 2) * 26, 8, 0, 7); ctx.fill();
     if (!standings[i].ai) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke(); }
   }
 
-  // top-right: timer
   ctx.fillStyle = "rgba(0,0,0,0.45)";
   roundRect(W - 190, 12, 178, 46, 12); ctx.fill();
   ctx.fillStyle = "#fff"; ctx.font = "bold 26px Consolas, monospace";
   ctx.textAlign = "right";
   ctx.fillText(fmtTime(Math.max(raceTime, 0)), W - 26, 22);
 
-  // minimap bottom-left (skip on tiny screens where it hits touch buttons)
   if (!IS_TOUCH || W > 700) drawMinimap();
 
-  // center messages
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
   if (state === "count") {
     const n = 3 - Math.floor(stateT);
@@ -600,6 +974,7 @@ function drawHUD() {
     ctx.fillText(n > 0 ? String(n) : "GO!", W / 2, H / 2 - 60);
     ctx.font = "18px Arial, sans-serif"; ctx.fillStyle = "rgba(255,255,255,0.9)";
     ctx.fillText(IS_TOUCH ? "Buttons to drive · 3 laps" : "Arrows / WASD to drive · Space = handbrake · 3 laps", W / 2, H / 2 + 30);
+    if (curTrack === 1) ctx.fillText("Hit the ramp fast to clear the water!", W / 2, H / 2 + 56);
   } else if (state === "race" && stateT < 1.2) {
     ctx.globalAlpha = 1 - stateT / 1.2;
     ctx.font = "bold 130px Arial, sans-serif"; ctx.fillStyle = "#7fe07f";
@@ -612,25 +987,31 @@ function drawHUD() {
   }
   if (state === "done") {
     ctx.fillStyle = "rgba(0,0,0,0.65)";
-    roundRect(W / 2 - 230, H / 2 - 170, 460, 340, 18); ctx.fill();
+    roundRect(W / 2 - 230, H / 2 - 180, 460, 380, 18); ctx.fill();
     ctx.fillStyle = pos === 1 ? "#ffd75e" : "#fff";
     ctx.font = "bold 44px Arial, sans-serif";
-    ctx.fillText(pos === 1 ? "🏆 YOU WIN!" : `${pos}${suffix} PLACE`, W / 2, H / 2 - 125);
+    ctx.fillText(pos === 1 ? "🏆 YOU WIN!" : `${pos}${suffix} PLACE`, W / 2, H / 2 - 135);
     ctx.font = "22px Arial, sans-serif";
     for (let i = 0; i < standings.length; i++) {
       const c = standings[i];
       ctx.fillStyle = c.color;
-      ctx.beginPath(); ctx.arc(W / 2 - 150, H / 2 - 70 + i * 40, 9, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.arc(W / 2 - 150, H / 2 - 80 + i * 38, 9, 0, 7); ctx.fill();
       ctx.fillStyle = "#fff"; ctx.textAlign = "left";
-      ctx.fillText(`${i + 1}. ${c.name}`, W / 2 - 128, H / 2 - 70 + i * 40);
+      ctx.fillText(`${i + 1}. ${c.name}`, W / 2 - 128, H / 2 - 80 + i * 38);
       ctx.textAlign = "right";
-      ctx.fillText(c.finished ? fmtTime(c.finishTime) : "racing…", W / 2 + 180, H / 2 - 70 + i * 40);
+      ctx.fillText(c.finished ? fmtTime(c.finishTime) : "racing…", W / 2 + 180, H / 2 - 80 + i * 38);
       ctx.textAlign = "center";
     }
-    ctx.fillStyle = "#ffd75e"; ctx.font = "18px Arial, sans-serif";
-    if (bestTime) ctx.fillText(`Best: ${fmtTime(bestTime)}`, W / 2, H / 2 + 105);
-    ctx.fillStyle = "rgba(255,255,255,0.85)";
-    ctx.fillText(IS_TOUCH ? "Tap to race again" : "Press R to race again", W / 2, H / 2 + 140);
+    if (bestTimes[curTrack]) {
+      ctx.fillStyle = "#ffd75e"; ctx.font = "18px Arial, sans-serif";
+      ctx.fillText(`Best: ${fmtTime(bestTimes[curTrack])}`, W / 2, H / 2 + 82);
+    }
+    const bw = 190, bh = 52;
+    button(W / 2 - bw - 10, H / 2 + 118, bw, bh, () => startRace(curTrack));
+    button(W / 2 + 10, H / 2 + 118, bw, bh, () => { state = "menu"; });
+    ctx.fillStyle = "#fff"; ctx.font = "bold 20px Arial, sans-serif";
+    ctx.fillText(IS_TOUCH ? "REMATCH" : "REMATCH (R)", W / 2 - bw / 2 - 10, H / 2 + 144);
+    ctx.fillText(IS_TOUCH ? "TRACKS" : "TRACKS (N)", W / 2 + bw / 2 + 10, H / 2 + 144);
   }
 }
 
