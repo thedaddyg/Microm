@@ -124,7 +124,64 @@ const TRACKS = [
       };
     },
   },
+  {
+    name: "Backyard Machine",
+    blurb: "dominoes · bowling ball · sprinkler chaos",
+    pts: [
+      [350,1500],[900,1560],[1450,1540],[1950,1480],[2300,1280],[2380,980],
+      [2250,700],[1950,560],[1650,620],[1520,850],[1350,1050],[1100,1120],
+      [850,1000],[800,750],[950,520],[750,330],[450,350],[280,550],
+      [200,850],[230,1200]
+    ],
+    theme: drawYardWorld,
+    hazards: () => {
+      // the Rube Goldberg chain: pad -> dominoes -> seesaw -> bowling ball
+      // across the track -> kiddie pool splash -> sprinkler (buried pipe)
+      const dominoes = [];
+      for (let i = 0; i < 14; i++) {
+        const t = i / 13;
+        const x = 1010 + (1290 - 1010) * t, y = 1430 + (1330 - 1430) * t;
+        const bx = Math.sin(t * Math.PI) * 28;   // gentle arc bulge
+        dominoes.push({ x: x - bx * 0.34, y: y - bx, ang: Math.atan2(-100, 280) });
+      }
+      return {
+        sands: [
+          { x: 2430, y: 1350, r: 85 },   // sandbox
+          { x: 590,  y: 215,  r: 90 },   // flower bed
+        ],
+        waters: [
+          { kind: "circle", x: 1318, y: 1722, r: 72 },   // kiddie pool
+        ],
+        ramps: [],
+        windmills: [],
+        bumps: [
+          { x: 2240, y: 818, w: 210, h: 36 },   // garden hose across the track
+        ],
+        machine: {
+          state: "armed", t: 0,
+          pad: { x: 860, y: 1470, w: 120, h: 180 },
+          dominoes,
+          seesaw: { x: 1330, y: 1310 },
+          ballLand: { x: 1318, y: 1430 },
+          ballEnd:  { x: 1318, y: 1675 },
+          pool: { x: 1318, y: 1722, r: 72 },
+          spr: { x: 945, y: 890, r: 160, ang: 0 },
+        },
+      };
+    },
+  },
 ];
+
+// Rube Goldberg timeline (seconds after the pad is hit)
+const MT = {
+  dom0: 0.4, domDt: 0.13,      // first domino, per-domino delay
+  seesaw: 2.3,                  // seesaw tips
+  launch: 2.55, land: 3.35,     // ball flight
+  splash: 4.85,                 // ball reaches the pool
+  sprOn: 5.2, sprOff: 9.2,      // sprinkler burst
+  reset: 9.4, armed: 11.2,      // everything winds back up
+};
+function sprinklerOn(M) { return M.state === "run" && M.t > MT.sprOn && M.t < MT.sprOff; }
 
 function nearestSampleOf(samples, x, y) {
   let best = 0, bd = Infinity;
@@ -419,6 +476,164 @@ function drawGolfWorld(g, track) {
   g.beginPath(); g.moveTo(fx, fy); g.lineTo(fx + 62, fy + 20); g.lineTo(fx, fy + 40); g.fill();
 }
 
+function drawYardWorld(g, track) {
+  const samples = track.samples, hz = track.hz || track.hazards(track);
+  track.hz = hz;
+  // mowed lawn with stripes
+  g.fillStyle = "#79ad58";
+  g.fillRect(0, 0, WORLD_W, WORLD_H);
+  for (let y = 0; y < WORLD_H; y += 220) {
+    g.fillStyle = "rgba(255,255,255,0.05)";
+    g.fillRect(0, y, WORLD_W, 110);
+  }
+  for (let i = 0; i < 420; i++) {
+    g.fillStyle = Math.random() < 0.5 ? "rgba(80,120,55,0.20)" : "rgba(170,210,130,0.15)";
+    g.beginPath();
+    g.arc(Math.random() * WORLD_W, Math.random() * WORLD_H, 8 + Math.random() * 30, 0, 7);
+    g.fill();
+  }
+  // picket fence around the yard
+  g.fillStyle = "#5a7a3f";
+  g.fillRect(0, 0, WORLD_W, 46); g.fillRect(0, WORLD_H - 46, WORLD_W, 46);
+  g.fillRect(0, 0, 46, WORLD_H); g.fillRect(WORLD_W - 46, 0, 46, WORLD_H);
+  g.fillStyle = "#d9c49a"; g.strokeStyle = "#a8925f"; g.lineWidth = 2;
+  for (let x = 8; x < WORLD_W; x += 34) {
+    for (const y of [6, WORLD_H - 40]) {
+      g.fillRect(x, y, 20, 34); g.strokeRect(x, y, 20, 34);
+    }
+  }
+  for (let y = 8; y < WORLD_H; y += 34) {
+    for (const x of [6, WORLD_W - 40]) {
+      g.fillRect(x, y, 34, 20); g.strokeRect(x, y, 34, 20);
+    }
+  }
+  // patio + BBQ, top right
+  for (let px = 0; px < 3; px++) {
+    for (let py = 0; py < 3; py++) {
+      g.fillStyle = (px + py) % 2 ? "#9a9a94" : "#8a8a84";
+      g.fillRect(2290 + px * 95, 60 + py * 95, 88, 88);
+    }
+  }
+  g.fillStyle = "rgba(0,0,0,0.25)";
+  g.beginPath(); g.ellipse(2430, 200, 55, 42, 0, 0, 7); g.fill();
+  g.fillStyle = "#2a2a2e"; g.beginPath(); g.arc(2425, 190, 48, 0, 7); g.fill();
+  g.fillStyle = "#3a3a40"; g.beginPath(); g.arc(2425, 190, 38, 0, 7); g.fill();
+  g.strokeStyle = "#555"; g.lineWidth = 4;
+  for (const a of [0.6, 1.6, 2.6]) {
+    g.beginPath(); g.moveTo(2425 - Math.cos(a) * 34, 190 - Math.sin(a) * 34);
+    g.lineTo(2425 + Math.cos(a) * 34, 190 + Math.sin(a) * 34); g.stroke();
+  }
+  // big tree, top left
+  g.fillStyle = "rgba(0,0,0,0.22)";
+  g.beginPath(); g.ellipse(215, 215, 135, 110, 0, 0, 7); g.fill();
+  for (const [ox, oy, r, c] of [[170,170,105,"#3e6b34"],[250,200,88,"#46783a"],[190,260,72,"#527f42"],[260,140,60,"#5c8a4a"]]) {
+    g.fillStyle = c; g.beginPath(); g.arc(ox, oy, r, 0, 7); g.fill();
+  }
+  // dog house + sleeping dog, bottom right
+  g.fillStyle = "rgba(0,0,0,0.2)";
+  g.fillRect(2382, 1612, 150, 130);
+  g.fillStyle = "#b0402e"; g.fillRect(2375, 1605, 150, 130);
+  g.fillStyle = "#7d2b1e"; g.fillRect(2375, 1605, 150, 34);
+  g.fillStyle = "#3a1e12"; g.beginPath(); g.arc(2450, 1690, 26, 0, 7); g.fill();
+  g.fillStyle = "#c9a06a";
+  g.beginPath(); g.ellipse(2260, 1730, 46, 30, 0.4, 0, 7); g.fill();
+  g.beginPath(); g.arc(2300, 1705, 20, 0, 7); g.fill();
+  g.strokeStyle = "#c9a06a"; g.lineWidth = 8; g.lineCap = "round";
+  g.beginPath(); g.moveTo(2218, 1745); g.quadraticCurveTo(2190, 1760, 2196, 1728); g.stroke();
+  // gnome + flamingo in the infield
+  g.fillStyle = "rgba(0,0,0,0.2)"; g.beginPath(); g.ellipse(1905, 1008, 22, 16, 0, 0, 7); g.fill();
+  g.fillStyle = "#3f5da8"; g.beginPath(); g.arc(1900, 1000, 17, 0, 7); g.fill();
+  g.fillStyle = "#eee"; g.beginPath(); g.arc(1900, 995, 12, 0.2, 3); g.fill();
+  g.fillStyle = "#d43b3b"; g.beginPath(); g.arc(1900, 990, 10, 0, 7); g.fill();
+  g.strokeStyle = "#e88aa0"; g.lineWidth = 4;
+  g.beginPath(); g.moveTo(2050, 905); g.lineTo(2050, 870); g.stroke();
+  g.fillStyle = "#e88aa0"; g.beginPath(); g.ellipse(2043, 868, 16, 10, -0.4, 0, 7); g.fill();
+  g.fillStyle = "#333"; g.beginPath(); g.arc(2030, 860, 3.5, 0, 7); g.fill();
+  // sandbox with wooden frame
+  const sb = hz.sands[0];
+  g.fillStyle = "#8a5f35"; g.fillRect(sb.x - sb.r - 12, sb.y - sb.r - 12, sb.r * 2 + 24, sb.r * 2 + 24);
+  g.fillStyle = "#e8d59a"; g.fillRect(sb.x - sb.r, sb.y - sb.r, sb.r * 2, sb.r * 2);
+  g.fillStyle = "rgba(160,130,70,0.5)";
+  for (let i = 0; i < 40; i++) {
+    g.beginPath();
+    g.arc(sb.x - sb.r + Math.random() * sb.r * 2, sb.y - sb.r + Math.random() * sb.r * 2, 2, 0, 7);
+    g.fill();
+  }
+  g.fillStyle = "#d43b3b"; g.fillRect(sb.x + 20, sb.y - 30, 34, 22);   // toy truck
+  g.fillStyle = "#333"; g.fillRect(sb.x + 24, sb.y - 12, 8, 6); g.fillRect(sb.x + 42, sb.y - 12, 8, 6);
+  // flower bed
+  const fb = hz.sands[1];
+  g.fillStyle = "#6b4a2a"; g.beginPath(); g.arc(fb.x, fb.y, fb.r, 0, 7); g.fill();
+  g.fillStyle = "#59391c"; g.lineWidth = 8; g.strokeStyle = "#59391c";
+  g.beginPath(); g.arc(fb.x, fb.y, fb.r - 4, 0, 7); g.stroke();
+  for (let i = 0; i < 26; i++) {
+    const a = i * 2.4, rr = Math.sqrt((i % 13) / 13) * (fb.r - 22);
+    const fx2 = fb.x + Math.cos(a) * rr, fy2 = fb.y + Math.sin(a) * rr;
+    g.fillStyle = ["#e86a6a", "#f0c34e", "#c96ae8", "#f0f0f0"][i % 4];
+    for (let p = 0; p < 5; p++) {
+      g.beginPath(); g.arc(fx2 + Math.cos(p * 1.26) * 7, fy2 + Math.sin(p * 1.26) * 7, 5, 0, 7); g.fill();
+    }
+    g.fillStyle = "#f0e04e"; g.beginPath(); g.arc(fx2, fy2, 4, 0, 7); g.fill();
+  }
+  // the track: a worn dirt path through the grass
+  const path = tracePath(g, samples);
+  g.lineJoin = "round"; g.lineCap = "round";
+  g.strokeStyle = "rgba(0,0,0,0.25)"; g.lineWidth = HALF_W * 2 + 22; g.stroke(path);
+  g.strokeStyle = "#a8845a"; g.lineWidth = HALF_W * 2 + 10; g.stroke(path);
+  g.strokeStyle = "#b8946a"; g.lineWidth = HALF_W * 2; g.stroke(path);
+  g.strokeStyle = "rgba(139,105,20,0.35)"; g.lineWidth = HALF_W * 1.2; g.stroke(path);
+  g.strokeStyle = "rgba(255,255,255,0.30)"; g.lineWidth = 4;
+  g.setLineDash([26, 26]); g.stroke(path); g.setLineDash([]);
+  // garden hose: from a reel, across the track (the bump), to the fence
+  const bmp = hz.bumps[0];
+  g.strokeStyle = "#2f8f3f"; g.lineWidth = 13; g.lineCap = "round";
+  g.beginPath();
+  g.moveTo(2150, bmp.y + 44);
+  g.quadraticCurveTo(2260, bmp.y + 4, 2380, bmp.y + 20);
+  g.quadraticCurveTo(2480, bmp.y + 32, 2564, bmp.y + 10);
+  g.stroke();
+  g.strokeStyle = "#26732f"; g.lineWidth = 5;
+  g.beginPath(); g.arc(2140, bmp.y + 46, 26, 0, 7); g.stroke();
+  g.beginPath(); g.arc(2140, bmp.y + 46, 14, 0, 7); g.stroke();
+  // buried pipe: pool -> sprinkler (so the chain reads on screen)
+  const M = hz.machine;
+  g.setLineDash([6, 14]); g.strokeStyle = "rgba(80,80,90,0.5)"; g.lineWidth = 6;
+  g.beginPath();
+  g.moveTo(M.pool.x - 40, M.pool.y - 40);
+  g.quadraticCurveTo(950, 1500, M.spr.x + 30, M.spr.y + 60);
+  g.stroke();
+  g.setLineDash([]);
+  // kiddie pool
+  g.fillStyle = "rgba(0,0,0,0.25)"; g.beginPath(); g.ellipse(M.pool.x + 5, M.pool.y + 7, M.pool.r + 10, M.pool.r + 2, 0, 0, 7); g.fill();
+  g.fillStyle = "#e05252"; g.beginPath(); g.arc(M.pool.x, M.pool.y, M.pool.r + 10, 0, 7); g.fill();
+  g.fillStyle = "#3f87cf"; g.beginPath(); g.arc(M.pool.x, M.pool.y, M.pool.r, 0, 7); g.fill();
+  g.strokeStyle = "rgba(255,255,255,0.4)"; g.lineWidth = 3;
+  g.beginPath(); g.arc(M.pool.x - 15, M.pool.y - 12, 22, 0.4, 2.4); g.stroke();
+  g.beginPath(); g.arc(M.pool.x + 20, M.pool.y + 15, 14, 3.4, 5.6); g.stroke();
+  // pressure pad base (yellow/black chevrons)
+  g.fillStyle = "#222";
+  g.fillRect(M.pad.x - 6, M.pad.y - 6, M.pad.w + 12, M.pad.h + 12);
+  g.fillStyle = "#f0c34e";
+  g.fillRect(M.pad.x, M.pad.y, M.pad.w, M.pad.h);
+  g.fillStyle = "#222";
+  for (let sy = M.pad.y; sy < M.pad.y + M.pad.h - 18; sy += 36) {
+    g.beginPath();
+    g.moveTo(M.pad.x, sy); g.lineTo(M.pad.x + M.pad.w, sy + 18);
+    g.lineTo(M.pad.x + M.pad.w, sy + 30); g.lineTo(M.pad.x, sy + 12);
+    g.fill();
+  }
+  // seesaw base
+  g.fillStyle = "#6b4a2a";
+  g.beginPath();
+  g.moveTo(M.seesaw.x - 16, M.seesaw.y + 14); g.lineTo(M.seesaw.x + 16, M.seesaw.y + 14);
+  g.lineTo(M.seesaw.x, M.seesaw.y - 6); g.fill();
+  // sprinkler base
+  g.fillStyle = "rgba(0,0,0,0.2)"; g.beginPath(); g.ellipse(M.spr.x + 3, M.spr.y + 4, 20, 15, 0, 0, 7); g.fill();
+  g.fillStyle = "#777"; g.beginPath(); g.arc(M.spr.x, M.spr.y, 16, 0, 7); g.fill();
+  g.fillStyle = "#999"; g.beginPath(); g.arc(M.spr.x, M.spr.y, 9, 0, 7); g.fill();
+  drawCheckers(g, samples[0]);
+}
+
 // ----- Cars ------------------------------------------------------------------
 const ROSTER = [
   { name: "You",     color: "#e33f3f", roof: "#f5807f", ai: false, top: 1.00 },
@@ -479,14 +694,19 @@ function updateCar(car, dt, throttle, steer, handbrake) {
     const s = SAMPLES[car.si];
     const off = Math.hypot(car.x - s.x, car.y - s.y) > HALF_W;
     const sand = inSand(car.x, car.y);
+    // sprinkler spray = soaked grass = no grip
+    let slippery = false;
+    const M = HZ.machine;
+    if (M && sprinklerOn(M) &&
+        (car.x - M.spr.x) ** 2 + (car.y - M.spr.y) ** 2 < M.spr.r * M.spr.r) slippery = true;
     // thrust: sand is worse than rough
     const fwdAcc = sand ? 180 : (off ? 270 : 570);
     const acc = throttle > 0 ? throttle * fwdAcc : throttle * 340;
     car.vx += fx * acc * dt; car.vy += fy * acc * dt;
     let f = car.vx * fx + car.vy * fy;
     let l = car.vx * nx + car.vy * ny;
-    const fwdDamp = sand ? 4.2 : (off ? 2.4 : 0.7);
-    const latDamp = handbrake ? 1.7 : (off || sand ? 4.0 : 8.0);
+    const fwdDamp = slippery ? 0.5 : (sand ? 4.2 : (off ? 2.4 : 0.7));
+    const latDamp = slippery ? 0.9 : (handbrake ? 1.7 : (off || sand ? 4.0 : 8.0));
     f *= Math.exp(-fwdDamp * dt);
     l *= Math.exp(-latDamp * dt);
     car.vx = fx * f + nx * l; car.vy = fy * f + ny * l;
@@ -500,6 +720,15 @@ function updateCar(car, dt, throttle, steer, handbrake) {
       car.air = AIR_TIME;
       car.vx *= 1.12; car.vy *= 1.12;
       if (!car.ai) beep(520, 0.12);
+    }
+    // small bumps (garden hose): a quick hop, no boost
+    for (const bmp of (HZ.bumps || [])) {
+      if (car.x >= bmp.x && car.x <= bmp.x + bmp.w &&
+          car.y >= bmp.y && car.y <= bmp.y + bmp.h &&
+          Math.hypot(car.vx, car.vy) > 200) {
+        car.air = 0.22;
+        break;
+      }
     }
     // water: splash + hand of god
     if (car.respawn <= 0 && car.air <= 0 && inWater(car.x, car.y)) {
@@ -587,6 +816,66 @@ function collideCars() {
   }
 }
 
+function ballPos(M) {
+  // returns {x, y, hop} during flight/roll phases, else null
+  if (M.state !== "run") return null;
+  if (M.t >= MT.launch && M.t < MT.land) {
+    const p = (M.t - MT.launch) / (MT.land - MT.launch);
+    return {
+      x: M.seesaw.x + (M.ballLand.x - M.seesaw.x) * p,
+      y: M.seesaw.y + (M.ballLand.y - M.seesaw.y) * p,
+      hop: Math.sin(p * Math.PI),
+    };
+  }
+  if (M.t >= MT.land && M.t < MT.splash) {
+    const p = (M.t - MT.land) / (MT.splash - MT.land);
+    return { x: M.ballLand.x, y: M.ballLand.y + (M.ballEnd.y - M.ballLand.y) * p, hop: 0 };
+  }
+  return null;
+}
+
+function updateMachine(dt) {
+  const M = HZ.machine;
+  if (!M) return;
+  if (M.state === "armed") {
+    for (const car of cars) {
+      if (car.air <= 0 && car.respawn <= 0 &&
+          car.x >= M.pad.x && car.x <= M.pad.x + M.pad.w &&
+          car.y >= M.pad.y && car.y <= M.pad.y + M.pad.h) {
+        M.state = "run"; M.t = 0;
+        beep(700, 0.12);
+        break;
+      }
+    }
+    return;
+  }
+  const prevT = M.t;
+  M.t += dt;
+  if (sprinklerOn(M)) M.spr.ang += dt * 4;
+  // clack per domino
+  const di = Math.floor((M.t - MT.dom0) / MT.domDt);
+  if (di >= 0 && di < M.dominoes.length && di !== Math.floor((prevT - MT.dom0) / MT.domDt)) beep(950 - di * 25, 0.04);
+  if (prevT < MT.splash && M.t >= MT.splash) {
+    splashes.push({ x: M.pool.x, y: M.pool.y, t: 0.5 });
+    beep(180, 0.3);
+  }
+  // the rolling ball flattens anything in its way
+  const b = ballPos(M);
+  if (b && !b.hop) {
+    for (const car of cars) {
+      if (car.air > 0 || car.respawn > 0) continue;
+      const dx = car.x - b.x, dy = car.y - b.y;
+      const d = Math.hypot(dx, dy);
+      if (d < 44) {
+        car.vx = (dx / (d || 1)) * 200;
+        car.vy = (dy / (d || 1)) * 140 + 240;   // shoved along the roll
+        if (!car.ai) beep(120, 0.2);
+      }
+    }
+  }
+  if (M.t >= MT.armed) { M.state = "armed"; M.t = 0; }
+}
+
 function windmillHits(dt) {
   for (const w of HZ.windmills) {
     w.ang += w.om * dt;
@@ -625,6 +914,7 @@ window.addEventListener("keydown", e => {
   if (state === "menu") {
     if (k === "1") startRace(0);
     if (k === "2") startRace(1);
+    if (k === "3") startRace(2);
     if (k === "d") setDifficulty((difficulty + 1) % DIFFS.length);
   } else {
     if (k === "r") startRace(curTrack);
@@ -779,6 +1069,7 @@ function frame(now) {
     }
     collideCars();
     windmillHits(dt);
+    updateMachine(dt);
 
     if (state === "race" && cars[0].finished) {
       state = "done"; stateT = 0;
@@ -831,6 +1122,7 @@ function frame(now) {
     ctx.lineWidth = 5;
     ctx.beginPath(); ctx.arc(sp.x, sp.y, (0.5 - sp.t) * 110 + 12, 0, 7); ctx.stroke();
   }
+  drawMachine();
   const order = [...cars].sort((a, b) => (a.air > 0 ? 1 : 0) - (b.air > 0 ? 1 : 0) || a.progress - b.progress);
   for (const car of order) drawCar(car);
   drawWindmills();
@@ -875,6 +1167,82 @@ function drawCar(car) {
     ctx.fillStyle = "rgba(255,255,255,0.85)";
     ctx.beginPath(); ctx.moveTo(-7, -8); ctx.lineTo(7, -8); ctx.lineTo(0, 2); ctx.fill();
     ctx.restore();
+  }
+}
+
+function drawMachine() {
+  const M = HZ.machine;
+  if (!M) return;
+  const run = M.state === "run";
+  // pressure pad glow while armed
+  if (!run) {
+    ctx.strokeStyle = `rgba(255,230,120,${0.4 + Math.sin(performance.now() * 0.004) * 0.25})`;
+    ctx.lineWidth = 5;
+    ctx.strokeRect(M.pad.x - 3, M.pad.y - 3, M.pad.w + 6, M.pad.h + 6);
+  }
+  // dominoes
+  for (let i = 0; i < M.dominoes.length; i++) {
+    const d = M.dominoes[i];
+    const tf = MT.dom0 + i * MT.domDt;
+    let p = 0;   // 0 standing, 1 flat
+    if (run) {
+      if (M.t > MT.reset) p = clamp(1 - (M.t - MT.reset - i * 0.05) / 0.5, 0, 1);
+      else p = clamp((M.t - tf) / 0.25, 0, 1);
+    }
+    ctx.save();
+    ctx.translate(d.x, d.y);
+    ctx.rotate(d.ang);
+    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    ctx.fillRect(-5 + p * 3, 3, 10 + p * 22, 8);
+    ctx.fillStyle = p > 0.5 ? "#d8d8d0" : "#f4f4ec";
+    ctx.fillRect(-5, -13 + p * 9, 10 + p * 24, 26 - p * 16);
+    ctx.strokeStyle = "#888"; ctx.lineWidth = 1.5;
+    ctx.strokeRect(-5, -13 + p * 9, 10 + p * 24, 26 - p * 16);
+    ctx.restore();
+  }
+  // seesaw plank (+ waiting ball before launch)
+  const tip = run ? clamp((M.t - MT.seesaw) / 0.25, 0, M.t > MT.reset ? 0 : 1) : 0;
+  ctx.save();
+  ctx.translate(M.seesaw.x, M.seesaw.y);
+  ctx.rotate(-0.5 - tip * 0.5);
+  ctx.fillStyle = "#8a5f35";
+  ctx.fillRect(-52, -7, 104, 14);
+  ctx.strokeStyle = "rgba(0,0,0,0.3)"; ctx.lineWidth = 2;
+  ctx.strokeRect(-52, -7, 104, 14);
+  ctx.restore();
+  // bowling ball: waiting, flying, rolling, or sunk
+  const b = ballPos(M);
+  const showWaiting = !run || M.t < MT.launch || M.t > MT.reset + 0.6;
+  if (b || showWaiting) {
+    const bx = b ? b.x : M.seesaw.x - 34, by = b ? b.y : M.seesaw.y - 30;
+    const hop = b ? b.hop : 0;
+    ctx.fillStyle = "rgba(0,0,0,0.3)";
+    ctx.beginPath(); ctx.ellipse(bx + hop * 12, by + 8 + hop * 22, 24 * (1 - hop * 0.3), 12, 0, 0, 7); ctx.fill();
+    const s = 1 + hop * 0.5;
+    ctx.fillStyle = "#252530";
+    ctx.beginPath(); ctx.arc(bx, by - hop * 30, 26 * s, 0, 7); ctx.fill();
+    ctx.fillStyle = "#3a3a4a";
+    ctx.beginPath(); ctx.arc(bx - 7 * s, by - hop * 30 - 8 * s, 12 * s, 0, 7); ctx.fill();
+    ctx.fillStyle = "#111";
+    for (const [hx, hy] of [[-4, -2], [5, -6], [6, 3]]) {
+      ctx.beginPath(); ctx.arc(bx + hx * s, by - hop * 30 + hy * s, 3.4 * s, 0, 7); ctx.fill();
+    }
+  }
+  // sprinkler burst
+  if (sprinklerOn(M)) {
+    ctx.fillStyle = "rgba(120,180,255,0.13)";
+    ctx.beginPath(); ctx.arc(M.spr.x, M.spr.y, M.spr.r, 0, 7); ctx.fill();
+    for (let j = 0; j < 3; j++) {
+      const base = M.spr.ang + j * (Math.PI * 2 / 3);
+      for (let k = 1; k <= 6; k++) {
+        const rr = (k / 6) * M.spr.r;
+        const a = base - k * 0.09;
+        ctx.fillStyle = `rgba(170,215,255,${0.85 - k * 0.11})`;
+        ctx.beginPath();
+        ctx.arc(M.spr.x + Math.cos(a) * rr, M.spr.y + Math.sin(a) * rr, 4.5 - k * 0.4, 0, 7);
+        ctx.fill();
+      }
+    }
   }
 }
 
@@ -961,7 +1329,7 @@ function drawMenu() {
   });
   ctx.font = "16px Arial, sans-serif";
   ctx.fillStyle = "rgba(255,255,255,0.7)";
-  ctx.fillText(IS_TOUCH ? "tap a track to start" : "click or press 1 / 2 · D cycles difficulty · N returns here anytime",
+  ctx.fillText(IS_TOUCH ? "tap a track to start" : "click or press 1‑3 · D cycles difficulty · N returns here anytime",
                W / 2, H * 0.36 + TRACKS.length * (bh + 22) + 20);
 }
 
@@ -1009,6 +1377,7 @@ function drawHUD() {
     ctx.font = "18px Arial, sans-serif"; ctx.fillStyle = "rgba(255,255,255,0.9)";
     ctx.fillText(IS_TOUCH ? "Buttons to drive · 3 laps" : "Arrows / WASD to drive · Space = handbrake · 3 laps", W / 2, H / 2 + 30);
     if (curTrack === 1) ctx.fillText("Hit the ramp fast to clear the water!", W / 2, H / 2 + 56);
+    if (curTrack === 2) ctx.fillText("The yellow pad starts the machine…", W / 2, H / 2 + 56);
   } else if (state === "race" && stateT < 1.2) {
     ctx.globalAlpha = 1 - stateT / 1.2;
     ctx.font = "bold 130px Arial, sans-serif"; ctx.fillStyle = "#7fe07f";
