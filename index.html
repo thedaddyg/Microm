@@ -1172,34 +1172,75 @@ if (location.hash === "#lbsetup") {
   (async () => {
     const out = document.createElement("div");
     out.style.cssText = "position:fixed;inset:12px;z-index:20;background:#111;color:#7fe07f;" +
-      "font-family:monospace;font-size:16px;padding:20px;border-radius:12px;overflow:auto;white-space:pre-wrap";
-    out.textContent = "Setting up leaderboard storage…";
+      "font-family:monospace;font-size:15px;padding:20px;border-radius:12px;overflow:auto;white-space:pre-wrap";
     document.body.appendChild(out);
+    const log = s => { out.textContent += s + "\n"; };
+    out.textContent = "Leaderboard storage setup\n=========================\n";
     const empty = JSON.stringify({ v: 1, boards: {} });
-    try {   // kvdb.io: anonymous bucket, id returned in the body
-      const res = await fetch("https://kvdb.io", { method: "POST", body: "email=" });
-      if (!res.ok) throw new Error("kvdb " + res.status);
-      const bucket = (await res.text()).trim();
-      const url = `https://kvdb.io/${bucket}/board`;
-      const put = await fetch(url, { method: "PUT", body: empty });
-      if (!put.ok) throw new Error("kvdb put " + put.status);
-      out.textContent = "✅ LEADERBOARD STORAGE CREATED\n\nSend this line back to Claude:\n\nLB_URL " + url;
-      return;
-    } catch (e1) {
-      try {   // fallback: jsonblob.com, id in the Location header
+
+    // does a full round trip: create, then verify we can read AND write it
+    async function verify(url) {
+      const put = await fetch(url, { method: "PUT",
+        headers: { "Content-Type": "application/json" }, body: empty });
+      if (!put.ok) throw new Error("put " + put.status);
+      const get = await fetch(url, { cache: "no-store" });
+      if (!get.ok) throw new Error("get " + get.status);
+      const j = await get.json();
+      if (!j || !j.boards) throw new Error("readback mismatch");
+      return url;
+    }
+    const providers = [
+      ["kvdb.io", async () => {
+        const res = await fetch("https://kvdb.io", { method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "email=microracers@example.com" });
+        if (!res.ok) throw new Error("create " + res.status);
+        const bucket = (await res.text()).trim();
+        if (!/^[A-Za-z0-9]{10,}$/.test(bucket)) throw new Error("bad id: " + bucket.slice(0, 40));
+        return verify(`https://kvdb.io/${bucket}/board`);
+      }],
+      ["extendsclass.com", async () => {
+        const res = await fetch("https://extendsclass.com/api/json-storage/bin", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: empty });
+        if (!res.ok) throw new Error("create " + res.status);
+        const j = await res.json();
+        if (!j.id) throw new Error("no id in " + JSON.stringify(j).slice(0, 60));
+        return verify("https://extendsclass.com/api/json-storage/bin/" + j.id);
+      }],
+      ["jsonblob.com", async () => {
         const res = await fetch("https://jsonblob.com/api/jsonBlob", {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: empty,
-        });
+          method: "POST", headers: { "Content-Type": "application/json" }, body: empty });
+        if (!res.ok) throw new Error("create " + res.status);
         const loc = res.headers.get("Location") || res.headers.get("location");
-        if (!res.ok || !loc) throw new Error("jsonblob " + res.status + " loc=" + loc);
-        const url = loc.startsWith("http") ? loc : "https://jsonblob.com" + loc;
-        out.textContent = "✅ LEADERBOARD STORAGE CREATED\n\nSend this line back to Claude:\n\nLB_URL " + url;
+        if (!loc) throw new Error("Location header not exposed");
+        return verify(loc.startsWith("http") ? loc : "https://jsonblob.com" + loc);
+      }],
+    ];
+
+    // connectivity probe so wifi blocks are distinguishable from broken providers
+    try {
+      const r = await fetch("https://api.github.com/zen", { cache: "no-store" });
+      log("internet check (api.github.com): " + (r.ok ? "OK ✓" : "HTTP " + r.status));
+    } catch (e) {
+      log("internet check (api.github.com): FAILED — " + e.message);
+      log("\nGeneral internet appears blocked (captive wifi?).");
+      log("Re-open this page on normal internet and it should work.");
+      return;
+    }
+    for (const [name, fn] of providers) {
+      log("\ntrying " + name + " …");
+      try {
+        const url = await fn();
+        log("read/write verified ✓");
+        out.textContent += "\n✅ STORAGE CREATED\n\nSend this line back to Claude:\n\nLB_URL " + url + "\n";
+        try { await navigator.clipboard.writeText("LB_URL " + url); log("(copied to clipboard)"); } catch (e) {}
         return;
-      } catch (e2) {
-        out.textContent = "❌ Could not create storage.\n\nkvdb.io: " + e1.message +
-          "\njsonblob.com: " + e2.message + "\n\nTell Claude what you see here.";
+      } catch (e) {
+        log("✗ " + name + ": " + e.message);
       }
     }
+    log("\n❌ All providers failed — likely blocked by this network.");
+    log("Try again on normal wifi/cellular, or send Claude a screenshot.");
   })();
 }
 
