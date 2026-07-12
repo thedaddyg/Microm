@@ -1088,11 +1088,12 @@ async function lbSubmit(entry) {
     list.push({ n: entry.n, c: entry.c, t: entry.t, ts: entry.ts });
     list.sort((a, b) => a.t - b.t);
     boards[entry.track] = list.slice(0, 10);
-    const res = await lbRequest(LB_URL, {
-      method: "PUT",
+    const opts = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(lbCache),
-    });
+    };
+    let res = await lbRequest(LB_URL, { ...opts, method: "PUT" });
+    if (!res.ok) res = await lbRequest(LB_URL, { ...opts, method: "POST" });   // npoint et al
     if (!res.ok) throw new Error(res.status);
     try { localStorage.setItem("microRacersLB", JSON.stringify(lbCache)); } catch (e) {}
   } catch (e) { lbOnline = false; }
