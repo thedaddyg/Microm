@@ -908,6 +908,11 @@ function windmillHits(dt) {
 // ----- Input -----------------------------------------------------------------
 const keys = {};
 window.addEventListener("keydown", e => {
+  if (entryOpen) {
+    if (e.key === "Escape") closeEntry(false);
+    if (e.key === "Enter") closeEntry(true);
+    return;
+  }
   if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) e.preventDefault();
   const k = e.key.toLowerCase();
   keys[k] = true;
@@ -916,6 +921,12 @@ window.addEventListener("keydown", e => {
     if (k === "2") startRace(1);
     if (k === "3") startRace(2);
     if (k === "d") setDifficulty((difficulty + 1) % DIFFS.length);
+    if (k === "l") { boardTab = curTrack; state = "board"; lbFetch(); }
+  } else if (state === "board") {
+    if (k === "1") boardTab = 0;
+    if (k === "2") boardTab = 1;
+    if (k === "3") boardTab = 2;
+    if (k === "n" || k === "escape") state = "menu";
   } else {
     if (k === "r") startRace(curTrack);
     if (k === "n") { state = "menu"; }
@@ -929,6 +940,7 @@ window.addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
 let uiButtons = [];
 function pointerDown(px, py) {
   initAudio();
+  if (entryOpen) return true;
   for (const b of uiButtons) {
     if (px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h) {
       b.fn();
@@ -955,7 +967,7 @@ function touchZones() {
 function handleTouches(e) {
   e.preventDefault();
   initAudio();
-  if (e.type === "touchstart" && (state === "menu" || state === "done")) {
+  if (e.type === "touchstart" && (state === "menu" || state === "done" || state === "board")) {
     const t = e.changedTouches[0];
     if (t && pointerDown(t.clientX, t.clientY)) return;
   }
@@ -1000,6 +1012,197 @@ function beep(freq, dur) {
   } catch (e) {}
 }
 
+// ----- Global leaderboard -------------------------------------------------------
+// Backed by a free key-value store; provisioned once via opening the game
+// with #lbsetup. Until LB_URL is set, scores are kept locally only.
+const LB_URL = null;   // e.g. "https://kvdb.io/<bucket>/board"
+
+const COUNTRIES = [
+  ["AU","Australia"],["NZ","New Zealand"],["US","United States"],["GB","United Kingdom"],
+  ["IE","Ireland"],["CA","Canada"],["DE","Germany"],["FR","France"],["ES","Spain"],
+  ["IT","Italy"],["PT","Portugal"],["NL","Netherlands"],["BE","Belgium"],["CH","Switzerland"],
+  ["AT","Austria"],["SE","Sweden"],["NO","Norway"],["DK","Denmark"],["FI","Finland"],
+  ["PL","Poland"],["CZ","Czechia"],["GR","Greece"],["TR","Türkiye"],["JP","Japan"],
+  ["KR","South Korea"],["CN","China"],["TW","Taiwan"],["HK","Hong Kong"],["SG","Singapore"],
+  ["MY","Malaysia"],["TH","Thailand"],["VN","Vietnam"],["PH","Philippines"],["ID","Indonesia"],
+  ["IN","India"],["AE","UAE"],["IL","Israel"],["ZA","South Africa"],["BR","Brazil"],
+  ["AR","Argentina"],["MX","Mexico"],["CL","Chile"],["UA","Ukraine"],["FJ","Fiji"],
+];
+function flagEmoji(cc) {
+  return String.fromCodePoint(0x1F1E6 + cc.charCodeAt(0) - 65, 0x1F1E6 + cc.charCodeAt(1) - 65);
+}
+
+let lbCache = null;        // last board seen from the server {boards:{trackIdx:[...]}}
+let lbOnline = false;
+let lbSaving = false;
+let lbHighlight = null;    // entry to highlight on the board screen
+let boardTab = 0;
+try { lbCache = JSON.parse(localStorage.getItem("microRacersLB") || "null"); } catch (e) {}
+
+function lbLocal() {
+  try { return JSON.parse(localStorage.getItem("microRacersLocal") || "{}"); } catch (e) { return {}; }
+}
+function lbSaveLocal(entry) {
+  const all = lbLocal();
+  const list = all[entry.track] || [];
+  list.push(entry);
+  list.sort((a, b) => a.t - b.t);
+  all[entry.track] = list.slice(0, 10);
+  try { localStorage.setItem("microRacersLocal", JSON.stringify(all)); } catch (e) {}
+}
+function lbBoards() {
+  return (lbOnline || lbCache) && LB_URL ? ((lbCache && lbCache.boards) || {}) : lbLocal();
+}
+
+async function lbRequest(url, opts) {
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), 7000);
+  try { return await fetch(url, { ...opts, signal: ctrl.signal }); }
+  finally { clearTimeout(to); }
+}
+async function lbFetch() {
+  if (!LB_URL) return;
+  try {
+    const res = await lbRequest(LB_URL, { cache: "no-store" });
+    if (res.status === 404) { lbCache = { v: 1, boards: {} }; lbOnline = true; return; }
+    if (!res.ok) throw new Error(res.status);
+    lbCache = await res.json();
+    if (!lbCache || typeof lbCache !== "object" || !lbCache.boards) lbCache = { v: 1, boards: {} };
+    lbOnline = true;
+    try { localStorage.setItem("microRacersLB", JSON.stringify(lbCache)); } catch (e) {}
+  } catch (e) { lbOnline = false; }
+}
+function lbQualifies(track, t) {
+  const list = lbBoards()[track] || [];
+  return list.length < 10 || t < list[list.length - 1].t;
+}
+async function lbSubmit(entry) {
+  lbSaveLocal(entry);
+  if (!LB_URL) return;
+  lbSaving = true;
+  try {
+    await lbFetch();
+    if (!lbOnline) throw new Error("offline");
+    const boards = lbCache.boards;
+    const list = boards[entry.track] || [];
+    list.push({ n: entry.n, c: entry.c, t: entry.t, ts: entry.ts });
+    list.sort((a, b) => a.t - b.t);
+    boards[entry.track] = list.slice(0, 10);
+    const res = await lbRequest(LB_URL, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(lbCache),
+    });
+    if (!res.ok) throw new Error(res.status);
+    try { localStorage.setItem("microRacersLB", JSON.stringify(lbCache)); } catch (e) {}
+  } catch (e) { lbOnline = false; }
+  lbSaving = false;
+}
+
+// --- arcade initials entry overlay (HTML for native mobile keyboards) ---
+let entryOpen = false, entryHandled = false;
+const entryDiv = document.createElement("div");
+entryDiv.style.cssText =
+  "display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:10;" +
+  "background:rgba(12,16,12,0.96);border:3px solid #ffd75e;border-radius:16px;padding:22px 26px;" +
+  "font-family:Consolas,monospace;color:#fff;text-align:center;min-width:270px";
+entryDiv.innerHTML =
+  '<div style="color:#ffd75e;font-size:22px;font-weight:bold;letter-spacing:2px">NEW TOP 10!</div>' +
+  '<div id="lbTime" style="margin:6px 0 14px;font-size:16px;opacity:0.85"></div>' +
+  '<input id="lbName" maxlength="3" autocomplete="off" placeholder="AAA" style="width:130px;font-size:38px;' +
+  'text-align:center;letter-spacing:12px;font-family:Consolas,monospace;background:#000;color:#7fe07f;' +
+  'border:2px solid #444;border-radius:8px;padding:6px 0 6px 12px;text-transform:uppercase">' +
+  '<div style="margin:14px 0">' +
+  '<select id="lbCountry" style="font-size:17px;padding:7px 10px;border-radius:8px;background:#000;' +
+  'color:#fff;border:2px solid #444;max-width:230px"></select></div>' +
+  '<button id="lbSave" style="font-size:18px;font-weight:bold;padding:10px 26px;margin:4px 8px;border-radius:10px;' +
+  'border:none;background:#ffd75e;color:#222;font-family:inherit">SAVE</button>' +
+  '<button id="lbSkip" style="font-size:15px;padding:10px 16px;margin:4px 0;border-radius:10px;' +
+  'border:1px solid #666;background:transparent;color:#aaa;font-family:inherit">skip</button>';
+document.body.appendChild(entryDiv);
+const lbNameEl = entryDiv.querySelector("#lbName");
+const lbCountryEl = entryDiv.querySelector("#lbCountry");
+for (const [cc, name] of COUNTRIES) {
+  const o = document.createElement("option");
+  o.value = cc; o.textContent = `${flagEmoji(cc)} ${name}`;
+  lbCountryEl.appendChild(o);
+}
+lbCountryEl.value = "AU";
+lbNameEl.addEventListener("input", () => {
+  lbNameEl.value = lbNameEl.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 3);
+});
+function openEntry(time) {
+  entryOpen = true;
+  entryDiv.querySelector("#lbTime").textContent = fmtTime(time) + " · " + TRACKS[curTrack].name;
+  try {
+    lbNameEl.value = localStorage.getItem("microRacersName") || "";
+    lbCountryEl.value = localStorage.getItem("microRacersCountry") || "AU";
+  } catch (e) {}
+  if (!lbCountryEl.value) lbCountryEl.value = "AU";
+  entryDiv.style.display = "block";
+  entryDiv.dataset.time = time;
+  if (!IS_TOUCH) lbNameEl.focus();
+}
+function closeEntry(save) {
+  if (save) {
+    const entry = {
+      n: (lbNameEl.value || "???").padEnd(3, "?"),
+      c: lbCountryEl.value || "AU",
+      t: parseFloat(entryDiv.dataset.time),
+      ts: Date.now(),
+      track: curTrack,
+    };
+    try {
+      localStorage.setItem("microRacersName", entry.n);
+      localStorage.setItem("microRacersCountry", entry.c);
+    } catch (e) {}
+    lbHighlight = entry;
+    lbSubmit(entry);
+    boardTab = curTrack;
+    state = "board";
+  }
+  entryOpen = false;
+  entryDiv.style.display = "none";
+}
+entryDiv.querySelector("#lbSave").addEventListener("click", () => closeEntry(true));
+entryDiv.querySelector("#lbSkip").addEventListener("click", () => closeEntry(false));
+
+// --- one-time storage provisioning: open the game with #lbsetup ---
+if (location.hash === "#lbsetup") {
+  (async () => {
+    const out = document.createElement("div");
+    out.style.cssText = "position:fixed;inset:12px;z-index:20;background:#111;color:#7fe07f;" +
+      "font-family:monospace;font-size:16px;padding:20px;border-radius:12px;overflow:auto;white-space:pre-wrap";
+    out.textContent = "Setting up leaderboard storage…";
+    document.body.appendChild(out);
+    const empty = JSON.stringify({ v: 1, boards: {} });
+    try {   // kvdb.io: anonymous bucket, id returned in the body
+      const res = await fetch("https://kvdb.io", { method: "POST", body: "email=" });
+      if (!res.ok) throw new Error("kvdb " + res.status);
+      const bucket = (await res.text()).trim();
+      const url = `https://kvdb.io/${bucket}/board`;
+      const put = await fetch(url, { method: "PUT", body: empty });
+      if (!put.ok) throw new Error("kvdb put " + put.status);
+      out.textContent = "✅ LEADERBOARD STORAGE CREATED\n\nSend this line back to Claude:\n\nLB_URL " + url;
+      return;
+    } catch (e1) {
+      try {   // fallback: jsonblob.com, id in the Location header
+        const res = await fetch("https://jsonblob.com/api/jsonBlob", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: empty,
+        });
+        const loc = res.headers.get("Location") || res.headers.get("location");
+        if (!res.ok || !loc) throw new Error("jsonblob " + res.status + " loc=" + loc);
+        const url = loc.startsWith("http") ? loc : "https://jsonblob.com" + loc;
+        out.textContent = "✅ LEADERBOARD STORAGE CREATED\n\nSend this line back to Claude:\n\nLB_URL " + url;
+        return;
+      } catch (e2) {
+        out.textContent = "❌ Could not create storage.\n\nkvdb.io: " + e1.message +
+          "\njsonblob.com: " + e2.message + "\n\nTell Claude what you see here.";
+      }
+    }
+  })();
+}
+
 // ----- Race state ---------------------------------------------------------------
 let state = "menu";       // menu | count | race | done
 let stateT = 0, raceTime = 0, paused = false;
@@ -1021,11 +1224,14 @@ function startRace(trackIdx) {
   splashes = [];
   state = "count"; stateT = 0; raceTime = 0;
   finishOrder = []; lastBeep = -1; paused = false;
+  entryHandled = false;
   cam.x = cars[0].x; cam.y = cars[0].y;
+  lbFetch();   // freshen the board while we race
 }
 
 loadTrack(0);
 makeCars();   // parked on the grid behind the menu
+lbFetch();
 
 // ----- Camera --------------------------------------------------------------------
 const cam = { x: WORLD_W / 2, y: WORLD_H / 2, zoom: 1.1 };
@@ -1079,6 +1285,11 @@ function frame(now) {
       }
       beep(660, 0.3); setTimeout(() => beep(880, 0.4), 180);
     }
+    // arcade initials entry when the time makes the top 10
+    if (state === "done" && !entryHandled && stateT > 1.0) {
+      entryHandled = true;
+      if (lbQualifies(curTrack, cars[0].finishTime)) openEntry(cars[0].finishTime);
+    }
   } else {
     for (const w of HZ.windmills) w.ang += w.om * dt;   // idle spin behind menu
   }
@@ -1095,7 +1306,7 @@ function frame(now) {
   const p = cars[0];
   const spd = Math.hypot(p.vx, p.vy);
   let tx, ty, tz;
-  if (state === "menu") {
+  if (state === "menu" || state === "board") {
     tx = WORLD_W / 2; ty = WORLD_H / 2;
     tz = Math.max(W / WORLD_W, H / WORLD_H) * 1.02;
   } else {
@@ -1130,6 +1341,7 @@ function frame(now) {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   uiButtons = [];
   if (state === "menu") drawMenu();
+  else if (state === "board") drawBoard();
   else {
     drawHUD();
     if (IS_TOUCH) drawTouchControls();
@@ -1327,10 +1539,15 @@ function drawMenu() {
     }
     ctx.textAlign = "center";
   });
+  const ly = H * 0.36 + TRACKS.length * (bh + 22);
+  button(W / 2 - bw / 2, ly, bw, 52, () => { boardTab = curTrack; state = "board"; lbFetch(); });
+  ctx.fillStyle = "#ffd75e"; ctx.font = "bold 20px Arial, sans-serif";
+  ctx.fillText("🏆 LEADERBOARD", W / 2, ly + 27);
+
   ctx.font = "16px Arial, sans-serif";
   ctx.fillStyle = "rgba(255,255,255,0.7)";
-  ctx.fillText(IS_TOUCH ? "tap a track to start" : "click or press 1‑3 · D cycles difficulty · N returns here anytime",
-               W / 2, H * 0.36 + TRACKS.length * (bh + 22) + 20);
+  ctx.fillText(IS_TOUCH ? "tap a track to start" : "click or press 1‑3 · L leaderboard · D difficulty · N returns here",
+               W / 2, ly + 74);
 }
 
 function drawHUD() {
@@ -1418,6 +1635,71 @@ function drawHUD() {
     ctx.fillText(IS_TOUCH ? "REMATCH" : "REMATCH (R)", W / 2 - bw / 2 - 10, H / 2 + 144);
     ctx.fillText(IS_TOUCH ? "TRACKS" : "TRACKS (N)", W / 2 + bw / 2 + 10, H / 2 + 144);
   }
+}
+
+function drawBoard() {
+  ctx.fillStyle = "rgba(10,18,10,0.72)";
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillStyle = "#ffd75e"; ctx.font = "bold 36px Arial, sans-serif";
+  ctx.fillText("🏆 TOP 10", W / 2, 44);
+
+  // track tabs
+  const tw = Math.min((W - 60) / 3, 190), th = 40, ty = 84;
+  TRACKS.forEach((t, i) => {
+    const tx = W / 2 + (i - 1) * (tw + 10) - tw / 2;
+    uiButtons.push({ x: tx, y: ty, w: tw, h: th, fn: () => { boardTab = i; } });
+    ctx.fillStyle = i === boardTab ? "rgba(255,215,94,0.30)" : "rgba(255,255,255,0.10)";
+    roundRect(tx, ty, tw, th, 10); ctx.fill();
+    ctx.strokeStyle = i === boardTab ? "#ffd75e" : "rgba(255,255,255,0.3)"; ctx.lineWidth = 2;
+    roundRect(tx, ty, tw, th, 10); ctx.stroke();
+    ctx.fillStyle = i === boardTab ? "#ffd75e" : "rgba(255,255,255,0.8)";
+    ctx.font = `bold ${W < 620 ? 12 : 15}px Arial, sans-serif`;
+    ctx.fillText(t.name.toUpperCase(), tx + tw / 2, ty + th / 2 + 1);
+  });
+
+  const list = (lbBoards()[boardTab] || []);
+  const rowH = Math.min(38, (H - 260) / 10);
+  ctx.font = `bold ${Math.min(22, rowH * 0.62)}px Consolas, monospace`;
+  for (let i = 0; i < 10; i++) {
+    const y = 158 + i * rowH;
+    const e = list[i];
+    const mine = e && lbHighlight && e.n === lbHighlight.n && e.c === lbHighlight.c &&
+                 Math.abs(e.t - lbHighlight.t) < 0.005 && boardTab === lbHighlight.track;
+    if (mine) {
+      ctx.fillStyle = "rgba(255,215,94,0.22)";
+      roundRect(W / 2 - 210, y - rowH / 2 + 2, 420, rowH - 4, 8); ctx.fill();
+    }
+    ctx.fillStyle = e ? (mine ? "#ffd75e" : "#fff") : "rgba(255,255,255,0.25)";
+    ctx.textAlign = "right";
+    ctx.fillText(`${i + 1}.`, W / 2 - 155, y);
+    if (e) {
+      ctx.textAlign = "center";
+      ctx.fillText(flagEmoji(e.c || "AU"), W / 2 - 110, y);
+      ctx.textAlign = "left";
+      ctx.fillText(e.n, W / 2 - 60, y);
+      ctx.textAlign = "right";
+      ctx.fillText(fmtTime(e.t), W / 2 + 185, y);
+    } else {
+      ctx.textAlign = "left";
+      ctx.fillText("---", W / 2 - 60, y);
+      ctx.textAlign = "right";
+      ctx.fillText("-:--.--", W / 2 + 185, y);
+    }
+  }
+
+  ctx.textAlign = "center";
+  ctx.font = "14px Arial, sans-serif";
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  const status = !LB_URL ? "local scores on this device · global board coming soon"
+    : lbSaving ? "saving…"
+    : lbOnline ? "global · live" : "offline — showing last known scores";
+  ctx.fillText(status, W / 2, 158 + 10 * rowH + 12);
+
+  const bw2 = 170, bh2 = 48, by2 = 158 + 10 * rowH + 34;
+  button(W / 2 - bw2 / 2, by2, bw2, bh2, () => { state = "menu"; });
+  ctx.fillStyle = "#fff"; ctx.font = "bold 18px Arial, sans-serif";
+  ctx.fillText(IS_TOUCH ? "BACK" : "BACK (N)", W / 2, by2 + bh2 / 2 + 1);
 }
 
 function drawMinimap() {
